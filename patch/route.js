@@ -131,7 +131,36 @@ function markHot(hot, spawns, got, floor, cw, ch, radius){
   }
 }
 
-function shortest(floor, w, h, start, trail, exempt, hot){
+function clearanceOf(floor, cw, ch){
+  const dist = new Uint16Array(cw * ch);
+  const queue = [];
+  for (let y = 0; y < ch; y++){
+    for (let x = 0; x < cw; x++){
+      const i = y * cw + x;
+      if (!floor[i]) continue;
+      let edge = false;
+      for (const [dx, dy] of N4){
+        const nx = x + dx, ny = y + dy;
+        if (!inside(cw, ch, nx, ny) || !floor[ny * cw + nx]){ edge = true; break; }
+      }
+      if (edge){ dist[i] = 1; queue.push(i); }
+    }
+  }
+  for (let q = 0; q < queue.length; q++){
+    const i = queue[q], x = i % cw, y = (i / cw) | 0;
+    for (const [dx, dy] of N4){
+      const nx = x + dx, ny = y + dy;
+      if (!inside(cw, ch, nx, ny)) continue;
+      const v = ny * cw + nx;
+      if (!floor[v] || dist[v]) continue;
+      dist[v] = dist[i] + 1;
+      queue.push(v);
+    }
+  }
+  return dist;
+}
+
+function shortest(floor, w, h, start, trail, exempt, hot, clearance){
   const n = w * h;
   const dist = new Float64Array(n);
   dist.fill(Infinity);
@@ -151,7 +180,9 @@ function shortest(floor, w, h, start, trail, exempt, hot){
       const v = ny * w + nx;
       if (!floor[v]) continue;
       const time = trail[v] && !exempt[v] ? ALONG : hot[v] ? 0 : 1;
-      const nd = d + time * TIME + 1;
+      const room = clearance[v];
+      const center = room <= 1 ? 8 : room === 2 ? 3 : 0;
+      const nd = d + time * TIME + 1 + center;
       if (nd < dist[v]){
         dist[v] = nd;
         prev[v] = u;
@@ -224,6 +255,22 @@ function simplify(points){
   return points.filter((_, i) => keep[i]);
 }
 
+function simplifyRuns(points){
+  if (points.length < 2) return points;
+  const out = [];
+  let start = 0;
+  for (let i = 1; i <= points.length; i++){
+    if (i < points.length && !!points[i].retrace === !!points[start].retrace) continue;
+    const run = points.slice(start, i);
+    if (start > 0) run.unshift({ x: points[start - 1].x, y: points[start - 1].y, retrace: points[start].retrace });
+    const simple = simplify(run);
+    if (out.length) simple.shift();
+    out.push(...simple);
+    start = i;
+  }
+  return out;
+}
+
 function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   const width = layout.width, height = layout.height;
   const bytes = Uint8Array.from(atob(layout.mask), c => c.charCodeAt(0));
@@ -271,7 +318,9 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   let bossReached = !boss || bossAt < 0 || hits(boss, centerOf(here).x, centerOf(here).y, radius);
   walked[here] = 1;
   paintBar(trail, cw, ch, here, reach);
+  const room = clearanceOf(floor, cw, ch);
   const cells = [here];
+  const retraces = [false];
   let backs = 0, steps = 0;
   const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
   const horizon = Math.max(8, radius / CELL * 2);
@@ -280,7 +329,7 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
     exempt.fill(0);
     paintBar(exempt, cw, ch, here, reach);
     markHot(hot, spawns, got, floor, cw, ch, radius);
-    const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, trail, exempt, hot);
+    const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, trail, exempt, hot, room);
     const needBoss = !bossReached && covered >= goal;
     let best = -1, bestScore = 0;
     const pool = needBoss ? [bossAt] : spawnSpots(got, spawns, floor, cw, ch, stride, bossReached ? -1 : bossAt);
@@ -304,18 +353,20 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
     for (const cell of legCells){
       steps++;
       if (walked[cell]) backs++;
+      retraces.push(!!(trail[cell] && !exempt[cell]));
       walked[cell] = 1;
-      paintBar(trail, cw, ch, cell, reach);
       cells.push(cell);
       const at = centerOf(cell);
       covered += spawnPaint(got, spawns, at.x, at.y, radius);
       if (!bossReached && boss && hits(boss, at.x, at.y, radius)) bossReached = true;
     }
+    for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
     here = best;
   }
-  const points = simplify(cells.map(cell => ({
+  const points = simplifyRuns(cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,
     y: ((cell / cw) | 0) * CELL + CELL / 2,
+    retrace: retraces[index],
   })));
   points.covered = spawns.length ? covered / spawns.length : 0;
   points.backtrack = steps ? backs / steps : 0;
