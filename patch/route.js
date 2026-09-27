@@ -207,7 +207,7 @@ function pathFrom(prev, w, start, goal){
   return cells;
 }
 
-function spawnSpots(got, spawns, floor, cw, ch, stride, bossAt){
+function spawnSpots(got, spawns, floor, cw, ch, stride){
   const seen = new Uint8Array(cw * ch);
   const list = [];
   let n = 0;
@@ -229,7 +229,6 @@ function spawnSpots(got, spawns, floor, cw, ch, stride, bossAt){
       if (floor[y * cw + x]){ list.push(y * cw + x); break; }
     }
   }
-  if (bossAt >= 0 && !list.includes(bossAt)) list.push(bossAt);
   return list;
 }
 
@@ -305,7 +304,6 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
     return best;
   };
   let here = snap(entrance);
-  const bossAt = snap(boss);
   if (here < 0) return [];
   const got = new Uint8Array(spawns.length);
   const walked = new Uint8Array(floor.length);
@@ -315,7 +313,6 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   const reach = radius / CELL;
   const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
   let covered = spawnPaint(got, spawns, centerOf(here).x, centerOf(here).y, radius);
-  let bossReached = !boss || bossAt < 0 || hits(boss, centerOf(here).x, centerOf(here).y, radius);
   walked[here] = 1;
   paintBar(trail, cw, ch, here, reach);
   const room = clearanceOf(floor, cw, ch);
@@ -323,28 +320,23 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   const retraces = [false];
   let backs = 0, steps = 0;
   const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
-  const horizon = Math.max(8, radius / CELL * 2);
   let stop = 'legs';
-  for (let leg = 0; leg < 500 && (covered < goal || !bossReached); leg++){
+  for (let leg = 0; leg < 500 && covered < goal; leg++){
     exempt.fill(0);
     paintBar(exempt, cw, ch, here, reach);
     markHot(hot, spawns, got, floor, cw, ch, radius);
     const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, trail, exempt, hot, room);
-    const needBoss = !bossReached && covered >= goal;
     let best = -1, bestScore = 0;
-    const pool = needBoss ? [bossAt] : spawnSpots(got, spawns, floor, cw, ch, stride, bossReached ? -1 : bossAt);
+    const pool = spawnSpots(got, spawns, floor, cw, ch, stride);
     let reachable = 0;
     for (const spot of pool){
-      if (spot < 0) continue;
       const dist = search.dist[spot];
       if (!Number.isFinite(dist) || dist === 0) continue;
       reachable++;
       const at = centerOf(spot);
       const added = spawnGain(got, spawns, at.x, at.y, radius);
-      const reachesBoss = !bossReached && boss && hits(boss, at.x, at.y, radius);
-      if (!added && !reachesBoss) continue;
-      const worth = added + (reachesBoss ? spawns.length * 0.05 : 0);
-      const score = worth / (1 + Math.abs(dist - horizon));
+      if (!added) continue;
+      const score = added / dist;
       if (score > bestScore){ bestScore = score; best = spot; }
     }
     if (best < 0){ stop = 'no-candidate:' + pool.length + ':' + reachable; break; }
@@ -358,7 +350,6 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
       cells.push(cell);
       const at = centerOf(cell);
       covered += spawnPaint(got, spawns, at.x, at.y, radius);
-      if (!bossReached && boss && hits(boss, at.x, at.y, radius)) bossReached = true;
     }
     for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
     here = best;
@@ -370,7 +361,7 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   })));
   points.covered = spawns.length ? covered / spawns.length : 0;
   points.backtrack = steps ? backs / steps : 0;
-  points.stop = covered >= goal && bossReached ? 'done' : stop;
+  points.stop = covered >= goal ? 'done' : stop;
   points.spawns = spawns.length;
   return points;
 }
