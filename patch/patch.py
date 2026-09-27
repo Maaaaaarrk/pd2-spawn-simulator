@@ -79,6 +79,12 @@ markup = markup[:m.start()] + ('<main>\n<header class="page-head">'
     '<p class="eyebrow">Spawn research lab · experimental model</p>' + m.group(1) +
     '<div class="rune-rule" aria-hidden="true"></div></header>') + markup[m.end():]
 
+# ---- walking clear: target percent and the radius the group clears around the route
+markup = rep(markup, '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>',
+    '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>'
+    '<label>Clear target (%)<input id="clearTarget" type="number" min="1" max="100" step="1" value="90"></label>'
+    '<label>Group radius (subtiles)<input id="clearRadius" type="number" min="1" max="80" step="1" value="15"></label>', where='clear controls')
+
 # ---- boss and entrance markers (markers.py reads them from the installed DS1 presets)
 markup = rep(markup, '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement"></canvas>',
     '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement, the clear route, the entrance portal and the map boss"></canvas>'

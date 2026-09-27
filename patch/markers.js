@@ -42,16 +42,17 @@ function label(ctx, text, x, y){
   ctx.fillStyle = '#e6d39a'; ctx.fillText(text, x, y);
   ctx.restore();
 }
-function legend(m, hasRoute){
+function legend(m, hasRoute, routeCovered){
   const el = document.getElementById('mapMarkerLegend'); if (!el) return;
-  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + (hasRoute ? ':route' : '') : '';
+  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 15 };
+  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + ':' + choice.target + ':' + choice.radius + ':' + (hasRoute ? Math.round((routeCovered || 0) * 100) : 0) : '';
   if (el.dataset.key === key) return; el.dataset.key = key;
   const k = m && !m.custom_geometry && window.PD2MapMarkers[m.id];
   const bosses = k ? k.boss.map(b => b.name) : [], inferred = k && k.boss.some(b => b.inferred);
   el.replaceChildren();
   const item = (cls, text) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = cls; s.append(i, document.createTextNode(text)); el.append(s); };
   if (!k){ item('mk-none', 'Entrance and boss positions are only known for the reference layouts.'); return; }
-  if (hasRoute) item('mk-route', 'Clear route');
+  if (hasRoute) item('mk-route', 'Clear route · ' + Math.round((routeCovered || 0) * 100) + '% of the floor');
   item('mk-portal', k.entrance ? (k.entrance.source === 'portal' ? 'Entrance portal' : 'Entrance (arrival point)') : 'No entrance recorded');
   item(inferred ? 'mk-boss mk-inferred' : 'mk-boss', !bosses.length ? 'Boss position unknown: no single boss spawn point in this map file'
     : inferred ? 'Boss spawn point (inferred from the map file): ' + bosses.join(', ') : 'Boss: ' + bosses.join(', '));
@@ -67,7 +68,7 @@ function strokeRoute(ctx, route, ox, oy, scale){
 window.drawMapMarkers = function(ctx, m, ox, oy, scale){
   const k = m && !m.custom_geometry && window.PD2MapMarkers && window.PD2MapMarkers[m.id];
   const route = k && window.PD2ClearRoute ? window.PD2ClearRoute(m, k.entrance, k.boss[0]) : [];
-  legend(m, route.length > 1);
+  legend(m, route.length > 1, route.covered);
   if (!k) return;
   const at = p => [ox + (p.x + .5) * scale, oy + (p.y + .5) * scale];
   const showNames = scale >= 1.6;
@@ -83,4 +84,14 @@ window.drawMapMarkers = function(ctx, m, ox, oy, scale){
   if (k.entrance){ const [x, y] = at(k.entrance), r = clamp(scale * 5, 7, 20); portal(ctx, x, y, r); if (showNames) label(ctx, 'Entrance', x + r * .8 + 5, y); }
   for (const b of k.boss){ const [x, y] = at(b), r = clamp(scale * 4.5, 7, 18); skull(ctx, x, y, r, b.inferred); if (showNames) label(ctx, b.name, x + r + 5, y); }
 };
+function bindClearControls(){
+  const refresh = () => {
+    if (typeof repaint === 'function') repaint();
+    const loot = document.getElementById('lootPanel');
+    if (loot && !loot.hidden && typeof drawMap === 'function') drawMap();
+  };
+  for (const id of ['clearTarget', 'clearRadius']) document.getElementById(id)?.addEventListener('input', refresh);
+}
+if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindClearControls);
+else bindClearControls();
 })();
