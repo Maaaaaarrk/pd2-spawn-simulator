@@ -19,8 +19,8 @@ function settings(){
   const radius = readNumber('clearRadius');
   const teams = readNumber('clearTeams');
   return {
-    target: Number.isFinite(target) ? Math.max(1, Math.min(100, target)) : 90,
-    radius: Number.isFinite(radius) ? Math.max(1, Math.min(200, radius)) : 35,
+    target: Number.isFinite(target) ? Math.max(1, Math.min(100, target)) : 95,
+    radius: Number.isFinite(radius) ? Math.max(1, Math.min(200, radius)) : 25,
     teams: Number.isFinite(teams) ? Math.max(1, Math.min(6, Math.round(teams))) : 1,
   };
 }
@@ -360,85 +360,337 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
   const always = new Uint8Array(floor.length);
   always.fill(1);
   const reachFrom = nodes.map(cell => shortest(floor, cw, ch, { x: cell % cw, y: (cell / cw) | 0 }, blank, blank, always, clearance));
-  const link = (a, b) => {
-    if (a === b) return 0;
-    const dist = reachFrom[a].dist[nodes[b]];
-    if (!Number.isFinite(dist)) return 1e9;
-    return reachFrom[a].hops[nodes[b]] || 1e9;
+  const nNodes = nodes.length;
+  const pos = nodes.map(centerOf);
+  const hop = Array.from({ length: nNodes }, () => new Float64Array(nNodes));
+  for (let a = 0; a < nNodes; a++){
+    const dist = reachFrom[a].dist, hops = reachFrom[a].hops;
+    for (let b = 0; b < nNodes; b++){
+      if (a === b) continue;
+      hop[a][b] = Number.isFinite(dist[nodes[b]]) ? (hops[nodes[b]] || 1e9) : 1e9;
+    }
+  }
+  const active = new Uint8Array(nNodes);
+  active.fill(1);
+  for (let s = 1; s < nNodes; s++) if (hop[0][s] >= 1e9) active[s] = 0;
+  const r2 = radius * radius;
+  const isClose = Array.from({ length: nNodes }, () => new Uint8Array(nNodes * nNodes));
+  for (let a = 0; a < nNodes; a++){
+    if (!active[a]) continue;
+    for (let b = a + 1; b < nNodes; b++){
+      if (!active[b]) continue;
+      const ax = pos[a].x, ay = pos[a].y, bx = pos[b].x, by = pos[b].y;
+      const dx = bx - ax, dy = by - ay, span = dx * dx + dy * dy;
+      for (let c = 0; c < nNodes; c++){
+        if (!active[c] || c === a || c === b) continue;
+        const px = pos[c].x - ax, py = pos[c].y - ay;
+        const t = span === 0 ? 0 : Math.max(0, Math.min(1, (px * dx + py * dy) / span));
+        const qx = ax + t * dx - pos[c].x, qy = ay + t * dy - pos[c].y;
+        if (qx * qx + qy * qy > r2) continue;
+        isClose[c][a * nNodes + b] = 1;
+        isClose[c][b * nNodes + a] = 1;
+      }
+    }
+  }
+  const teamOf = new Int16Array(nNodes);
+  const nearByTeam = Array.from({ length: teamCount }, () => Array.from({ length: nNodes }, () => new Uint16Array(nNodes)));
+  const rebuildNear = () => {
+    for (let t = 0; t < teamCount; t++) for (let a = 0; a < nNodes; a++) nearByTeam[t][a].fill(0);
+    for (let c = 0; c < nNodes; c++){
+      if (c !== 0 && !active[c]) continue;
+      const row = isClose[c];
+      const teams = nearByTeam;
+      for (let t = 0; t < teams.length; t++){
+        const bucket = teams[t];
+        for (let a = 0; a < nNodes; a++){
+          const base = a * nNodes;
+          const line = bucket[a];
+          for (let b = 0; b < nNodes; b++) if (row[base + b]) line[b]++;
+        }
+      }
+    }
   };
-  const tourLength = order => order.reduce((sum, stop, index) => sum + link(index === 0 ? 0 : order[index - 1], stop), 0);
-  const twoOpt = order => {
-    for (let guard = 0; guard < 40; guard++){
-      let bestDelta = 0, bi = -1, bj = -1;
+  // Each skipped stand the straight link passes through adds this many hops of cost.
+  const PENALTY = 12;
+  const crossExtra = (a, b, ex1, ex2, team) => {
+    let count = nearByTeam[team][a][b];
+    const index = a * nNodes + b;
+    const exempt = (node) => node >= 0 && (node === 0 || (active[node] && teamOf[node] === team)) && isClose[node][index];
+    if (exempt(ex1)) count--;
+    if (ex2 !== ex1 && exempt(ex2)) count--;
+    return count > 0 ? count : 0;
+  };
+  const edgeCost = (order, i, team) => {
+    const a = i === 0 ? 0 : order[i - 1];
+    const b = order[i];
+    const h = hop[a][b];
+    if (h >= 1e9) return 1e9;
+    const exPrev = i === 0 ? -1 : (i === 1 ? 0 : order[i - 2]);
+    const exNext = i + 1 < order.length ? order[i + 1] : -1;
+    return h + crossExtra(a, b, exPrev, exNext, team) * PENALTY;
+  };
+  const metricOf = (order, team) => {
+    let total = 0;
+    for (let i = 0; i < order.length; i++){
+      const cost = edgeCost(order, i, team);
+      if (cost >= 1e9) return 1e9;
+      total += cost;
+    }
+    return total;
+  };
+  const hopOf = order => {
+    let total = 0;
+    for (let i = 0; i < order.length; i++){
+      const a = i === 0 ? 0 : order[i - 1];
+      const h = hop[a][order[i]];
+      if (h >= 1e9) return 1e9;
+      total += h;
+    }
+    return total;
+  };
+  const twoOpt = (order, team) => {
+    const limit = order.length > 70 ? 6 : 20;
+    for (let guard = 0; guard < limit; guard++){
+      let bestDelta = 0, best = null;
+      const base = metricOf(order, team);
       for (let i = 0; i < order.length; i++){
         for (let j = i + 1; j < order.length; j++){
           const prev = i === 0 ? 0 : order[i - 1];
           const next = j + 1 < order.length ? order[j + 1] : -1;
-          const before = link(prev, order[i]) + (next < 0 ? 0 : link(order[j], next));
-          const after = link(prev, order[j]) + (next < 0 ? 0 : link(order[i], next));
-          if (after - before < bestDelta){ bestDelta = after - before; bi = i; bj = j; }
+          const before = hop[prev][order[i]] + (next < 0 ? 0 : hop[order[j]][next]);
+          const after = hop[prev][order[j]] + (next < 0 ? 0 : hop[order[i]][next]);
+          if (after > before + PENALTY * order.length) continue;
+          const trial = order.slice(0, i).concat(order.slice(i, j + 1).reverse(), order.slice(j + 1));
+          const delta = metricOf(trial, team) - base;
+          if (delta < bestDelta){ bestDelta = delta; best = trial; }
         }
       }
-      if (bi < 0) break;
-      const reversed = order.slice(bi, bj + 1).reverse();
-      order.splice(bi, bj - bi + 1, ...reversed);
+      if (!best) break;
+      order.splice(0, order.length, ...best);
     }
   };
+  const orOpt = (order, team) => {
+    const limit = order.length > 70 ? 3 : 8;
+    for (let guard = 0; guard < limit; guard++){
+      const baseHop = hopOf(order);
+      let bestHop = baseHop, bestMetric = Infinity, best = null;
+      for (let len = 1; len <= 3; len++){
+        if (order.length <= len) continue;
+        for (let i = 0; i + len <= order.length; i++){
+          const block = order.slice(i, i + len);
+          const rest = order.slice(0, i).concat(order.slice(i + len));
+          const chunks = len === 1 ? [block] : [block, block.slice().reverse()];
+          for (let c = 0; c < chunks.length; c++){
+            const chunk = chunks[c];
+            for (let j = 0; j <= rest.length; j++){
+              if (c === 0 && j === i) continue;
+              const trial = rest.slice(0, j).concat(chunk, rest.slice(j));
+              const h = hopOf(trial);
+              if (h > bestHop || h >= baseHop) continue;
+              const metric = metricOf(trial, team);
+              if (h === bestHop && metric >= bestMetric) continue;
+              bestHop = h;
+              bestMetric = metric;
+              best = trial;
+            }
+          }
+        }
+      }
+      if (!best || bestHop >= baseHop) break;
+      order.splice(0, order.length, ...best);
+    }
+  };
+  rebuildNear();
   const tours = [];
   for (let team = 0; team < teamCount; team++) tours.push({ order: [] });
-  const used = new Uint8Array(nodes.length);
-  used[0] = 1;
-  while (used.some((flag, index) => index > 0 && !flag)){
-    let owner = 0, least = Infinity;
-    for (let i = 0; i < tours.length; i++){
-      const len = tourLength(tours[i].order);
-      if (len < least){ least = len; owner = i; }
+  {
+    const seen = new Uint8Array(nNodes);
+    let left = 0;
+    for (let s = 1; s < nNodes; s++) if (active[s]) left++;
+    while (left > 0){
+      let owner = 0, least = Infinity;
+      for (let i = 0; i < tours.length; i++){
+        const len = hopOf(tours[i].order);
+        if (len < least){ least = len; owner = i; }
+      }
+      const order = tours[owner].order;
+      const baseMetric = metricOf(order, owner);
+      let bestAdd = Infinity, bestStop = -1, bestAt = 0;
+      for (let stop = 1; stop < nNodes; stop++){
+        if (!active[stop] || seen[stop]) continue;
+        for (let at = 0; at <= order.length; at++){
+          const trial = order.slice();
+          trial.splice(at, 0, stop);
+          const add = metricOf(trial, owner) - baseMetric;
+          if (add < bestAdd){ bestAdd = add; bestStop = stop; bestAt = at; }
+        }
+      }
+      if (bestStop < 0) break;
+      order.splice(bestAt, 0, bestStop);
+      seen[bestStop] = 1;
+      teamOf[bestStop] = owner;
+      left--;
     }
-    const tour = tours[owner];
-    let bestAdd = Infinity, bestStop = -1, bestAt = 0;
-    for (let stop = 1; stop < nodes.length; stop++){
-      if (used[stop] || link(0, stop) >= 1e9) continue;
-      for (let at = 0; at <= tour.order.length; at++){
-        const prev = at === 0 ? 0 : tour.order[at - 1];
-        const next = at === tour.order.length ? -1 : tour.order[at];
-        const add = link(prev, stop) + (next < 0 ? 0 : link(stop, next) - link(prev, next));
-        if (add < bestAdd){ bestAdd = add; bestStop = stop; bestAt = at; }
+  }
+  let geomReady = false;
+  const spanOf = order => geomReady ? geomOf(order) : hopOf(order);
+  const polish = () => {
+    for (let ti = 0; ti < tours.length; ti++){
+      twoOpt(tours[ti].order, ti);
+      orOpt(tours[ti].order, ti);
+      twoOpt(tours[ti].order, ti);
+    }
+  };
+  const paired = (orderA, orderB) => {
+    const hops = [hopOf(orderA), hopOf(orderB)];
+    const geoms = [spanOf(orderA), spanOf(orderB)];
+    const hopRatio = Math.max(...hops) / Math.max(1, Math.min(...hops));
+    const geomRatio = Math.max(...geoms) / Math.max(1, Math.min(...geoms));
+    return Math.max(hopRatio, geomRatio);
+  };
+  const rebalance = () => {
+    for (let pass = 0; pass < 20 && tours.length > 1; pass++){
+      let longI = 0, shortI = 1 % tours.length;
+      const lens = tours.map(tour => Math.max(hopOf(tour.order), spanOf(tour.order) / CELL));
+      for (let i = 0; i < tours.length; i++){
+        if (lens[i] > lens[longI]) longI = i;
+        if (lens[i] < lens[shortI]) shortI = i;
+      }
+      if (longI === shortI) break;
+      if (tours[shortI].order.length === 0){
+        if (tours[longI].order.length < 2) break;
+        const stop = tours[longI].order.pop();
+        tours[shortI].order.push(stop);
+        teamOf[stop] = shortI;
+        rebuildNear();
+        continue;
+      }
+      const now = paired(tours[longI].order, tours[shortI].order);
+      if (now <= 1.08 || tours[longI].order.length < 2) break;
+      let choice = null, bestRatio = now;
+      for (let s = 0; s < tours[longI].order.length; s++){
+        const stop = tours[longI].order[s];
+        const without = tours[longI].order.filter((_, index) => index !== s);
+        for (let at = 0; at <= tours[shortI].order.length; at++){
+          const moved = tours[shortI].order.slice();
+          moved.splice(at, 0, stop);
+          const ratio = paired(without, moved);
+          if (ratio < bestRatio){ bestRatio = ratio; choice = { without, moved, stop }; }
+        }
+      }
+      if (!choice) break;
+      tours[longI].order = choice.without;
+      tours[shortI].order = choice.moved;
+      teamOf[choice.stop] = shortI;
+      rebuildNear();
+    }
+  };
+  const legCache = new Map();
+  const legCells = (a, b) => {
+    const key = a * nNodes + b;
+    const cached = legCache.get(key);
+    if (cached) return cached;
+    const cells = pathFrom(reachFrom[a].prev, cw, { x: nodes[a] % cw, y: (nodes[a] / cw) | 0 }, nodes[b]) || [];
+    legCache.set(key, cells);
+    return cells;
+  };
+  const pointsOf = order => {
+    const pts = [pos[0]];
+    let prev = 0;
+    for (let s = 0; s < order.length; s++){
+      const cells = legCells(prev, order[s]);
+      for (let k = 0; k < cells.length; k++) pts.push(centerOf(cells[k]));
+      prev = order[s];
+    }
+    return simplify(pts);
+  };
+  const geomOf = order => {
+    const pts = pointsOf(order);
+    let total = 0;
+    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
+    return total;
+  };
+  geomReady = true;
+  const lim = Math.ceil(radius / CELL);
+  const coverCount = orders => {
+    const seen = new Uint8Array(floor.length);
+    seen[nodes[0]] = 1;
+    for (let t = 0; t < orders.length; t++){
+      let prev = 0;
+      const order = orders[t];
+      for (let s = 0; s < order.length; s++){
+        const cells = legCells(prev, order[s]);
+        for (let k = 0; k < cells.length; k++) seen[cells[k]] = 1;
+        prev = order[s];
       }
     }
-    if (bestStop < 0) break;
-    tour.order.splice(bestAt, 0, bestStop);
-    used[bestStop] = 1;
-  }
-  for (const tour of tours) twoOpt(tour.order);
-  for (let pass = 0; pass < 24 && tours.length > 1; pass++){
-    let longI = 0, shortI = 0;
-    for (let i = 0; i < tours.length; i++){
-      if (tourLength(tours[i].order) > tourLength(tours[longI].order)) longI = i;
-      if (tourLength(tours[i].order) < tourLength(tours[shortI].order)) shortI = i;
-    }
-    const longLen = tourLength(tours[longI].order), shortLen = tourLength(tours[shortI].order);
-    if (longLen <= shortLen * 1.1 || tours[longI].order.length < 2) break;
-    let choice = null, bestImbalance = longLen - shortLen;
-    for (let s = 0; s < tours[longI].order.length; s++){
-      const stop = tours[longI].order[s];
-      const without = tours[longI].order.filter((_, index) => index !== s);
-      const newLong = tourLength(without);
-      let bestAt = 0, bestAdd = Infinity;
-      for (let at = 0; at <= tours[shortI].order.length; at++){
-        const prev = at === 0 ? 0 : tours[shortI].order[at - 1];
-        const next = at === tours[shortI].order.length ? -1 : tours[shortI].order[at];
-        const add = link(prev, stop) + (next < 0 ? 0 : link(stop, next) - link(prev, next));
-        if (add < bestAdd){ bestAdd = add; bestAt = at; }
+    let total = 0;
+    for (let m = 0; m < spawns.length; m++){
+      const sx = spawns[m].x, sy = spawns[m].y;
+      const cx = sx / CELL | 0, cy = sy / CELL | 0;
+      let hit = false;
+      for (let dy = -lim; dy <= lim && !hit; dy++){
+        const y = cy + dy;
+        if (y < 0 || y >= ch) continue;
+        for (let dx = -lim; dx <= lim; dx++){
+          const x = cx + dx;
+          if (x < 0 || x >= cw || !seen[y * cw + x]) continue;
+          const ddx = x * CELL + CELL / 2 - sx, ddy = y * CELL + CELL / 2 - sy;
+          if (ddx * ddx + ddy * ddy <= r2){ hit = true; break; }
+        }
       }
-      const imbalance = Math.abs(newLong - (shortLen + bestAdd));
-      if (imbalance < bestImbalance){ bestImbalance = imbalance; choice = { without, stop, bestAt }; }
+      if (hit) total++;
     }
-    if (!choice) break;
-    tours[longI].order = choice.without;
-    tours[shortI].order.splice(choice.bestAt, 0, choice.stop);
-    twoOpt(tours[longI].order);
-    twoOpt(tours[shortI].order);
-  }
+    return total;
+  };
+  const prune = () => {
+    const minStops = 1;
+    for (let guard = 0; guard < nNodes; guard++){
+      const orders = tours.map(tour => tour.order);
+      const base = coverCount(orders);
+      const safeGoal = Math.min(spawns.length, Math.ceil(spawns.length * (targetPct / 100 + 0.012)));
+      const need = base < goal ? base : Math.min(base, safeGoal);
+      const ranked = [];
+      for (let ti = 0; ti < tours.length; ti++){
+        const order = tours[ti].order;
+        if (order.length <= minStops) continue;
+        for (let s = 0; s < order.length; s++){
+          const trial = order.filter((_, index) => index !== s);
+          const saving = hopOf(order) - hopOf(trial);
+          if (saving < 0) continue;
+          ranked.push({ ti, trial, saving, stop: order[s] });
+        }
+      }
+      ranked.sort((a, b) => b.saving - a.saving);
+      let picked = null;
+      for (let i = 0; i < ranked.length; i++){
+        const cand = ranked[i];
+        const nextOrders = orders.slice();
+        nextOrders[cand.ti] = cand.trial;
+        if (coverCount(nextOrders) < need) continue;
+        picked = cand;
+        break;
+      }
+      if (!picked) break;
+      tours[picked.ti].order = picked.trial;
+      active[picked.stop] = 0;
+    }
+  };
+  const copyOrders = () => tours.map(tour => tour.order.slice());
+  const restoreOrders = saved => { for (let i = 0; i < tours.length; i++) tours[i].order = saved[i]; };
+  polish();
+  rebalance();
+  prune();
+  rebuildNear();
+  const kept = copyOrders();
+  const keptCover = coverCount(tours.map(tour => tour.order));
+  polish();
+  if (coverCount(tours.map(tour => tour.order)) < keptCover) restoreOrders(kept);
+  const balanced = copyOrders();
+  const balancedCover = coverCount(tours.map(tour => tour.order));
+  const coverFloor = Math.min(balancedCover, Math.ceil(spawns.length * (targetPct / 100 + 0.008)));
+  rebalance();
+  if (coverCount(tours.map(tour => tour.order)) < coverFloor) restoreOrders(balanced);
   const got = new Uint8Array(spawns.length);
   const walked = new Uint8Array(floor.length);
   const trail = new Uint8Array(floor.length);
@@ -480,7 +732,8 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
     mover.steps += legCells.length;
     mover.here = target;
     mover.hereNode = targetNode;
-    if (covered >= goal) break;
+    const coverStop = Math.min(spawns.length, goal + Math.ceil(spawns.length * 0.012));
+    if (teamCount < 2 && covered >= coverStop) break;
   }
   const routes = runners.map(runner => simplifyRuns(runner.cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,

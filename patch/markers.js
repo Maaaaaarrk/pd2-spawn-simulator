@@ -45,7 +45,7 @@ function label(ctx, text, x, y){
 const TEAM_COLORS = ['#ff4d3a', '#3dde7a', '#e6c15a', '#c77dff', '#ff9f43', '#3ec6ff'];
 function legend(m, route, spawnCount){
   const el = document.getElementById('mapMarkerLegend'); if (!el) return;
-  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 35, teams: 1 };
+  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 95, radius: 25, teams: 1 };
   const teams = route && route.teams && route.teams.length ? route.teams : route && route.length > 1 ? [route] : [];
   const retrace = teams.some(path => path.some(point => point.retrace));
   const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + ':' + choice.target + ':' + choice.radius + ':' + choice.teams + ':' + teams.length + ':' + (route && route.covered ? Math.round(route.covered * 100) : 0) + (retrace ? ':re' : '') : '';
@@ -89,7 +89,7 @@ window.drawMapMarkers = function(ctx, m, ox, oy, scale, spawns){
   const showNames = scale >= 1.6;
   const paths = route.teams && route.teams.length ? route.teams : route.length > 1 ? [route] : [];
   if (paths.length){
-    const group = window.PD2ClearSettings ? window.PD2ClearSettings().radius : 35;
+    const group = window.PD2ClearSettings ? window.PD2ClearSettings().radius : 25;
     const bar = group * 2 * scale;
     const core = Math.max(1.25, scale * 1.05);
     ctx.save();
