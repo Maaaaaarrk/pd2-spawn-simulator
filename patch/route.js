@@ -199,7 +199,51 @@ function orthogonal(points){
     if (!straight || !!a.retrace !== !!b.retrace || !!b.retrace !== !!c.retrace) slim.push(b);
   }
   if (out.length > 1) slim.push(out[out.length - 1]);
-  return slim.filter(Boolean);
+  return destair(slim.filter(Boolean));
+}
+
+function destair(points){
+  if (!points || points.length < 4) return points;
+  const out = [];
+  let i = 0;
+  while (i < points.length){
+    let j = i;
+    while (j < points.length - 1){
+      const dx = Math.abs(points[j + 1].x - points[j].x);
+      const dy = Math.abs(points[j + 1].y - points[j].y);
+      if (Math.min(dx, dy) > 0.01 || Math.max(dx, dy) > CELL + 0.01) break;
+      j++;
+    }
+    if (j - i >= 3){
+      const a = points[i], b = points[j];
+      const ys = [], xs = [];
+      for (let k = i; k <= j; k++){ xs.push(points[k].x); ys.push(points[k].y); }
+      xs.sort((p, q) => p - q);
+      ys.sort((p, q) => p - q);
+      const horiz = Math.abs(b.x - a.x) >= Math.abs(b.y - a.y);
+      if (horiz){
+        const y = ys[ys.length >> 1];
+        out.push({ x: a.x, y, retrace: a.retrace });
+        out.push({ x: b.x, y, retrace: b.retrace });
+        if (b.y !== y) out.push({ x: b.x, y: b.y, retrace: b.retrace });
+      } else {
+        const x = xs[xs.length >> 1];
+        out.push({ x, y: a.y, retrace: a.retrace });
+        out.push({ x, y: b.y, retrace: b.retrace });
+        if (b.x !== x) out.push({ x: b.x, y: b.y, retrace: b.retrace });
+      }
+      i = j + 1;
+    } else {
+      out.push(points[i]);
+      i++;
+    }
+  }
+  const slim = [];
+  for (const point of out){
+    const prev = slim[slim.length - 1];
+    if (!prev || prev.x !== point.x || prev.y !== point.y) slim.push(point);
+  }
+  return slim;
 }
 
 function plan(layout, entrance, boss, spawns, targetPct, radius, teamCount){
