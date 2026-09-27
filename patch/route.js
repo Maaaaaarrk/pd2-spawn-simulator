@@ -309,47 +309,164 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
   };
   let here = snap(entrance);
   if (here < 0) return [];
+  const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
+  const clearance = clearanceOf(floor, cw, ch);
+  const standFor = monster => {
+    const lim = Math.ceil(radius / CELL);
+    const cx = monster.x / CELL | 0, cy = monster.y / CELL | 0;
+    let best = -1, bestClear = -1, bestD = Infinity;
+    for (let dy = -lim; dy <= lim; dy++){
+      for (let dx = -lim; dx <= lim; dx++){
+        const x = cx + dx, y = cy + dy;
+        if (!inside(cw, ch, x, y) || !floor[y * cw + x]) continue;
+        const at = centerOf(y * cw + x);
+        if (!hits(monster, at.x, at.y, radius)) continue;
+        const room = clearance[y * cw + x];
+        const d = dx * dx + dy * dy;
+        if (room > bestClear || (room === bestClear && d < bestD)){ best = y * cw + x; bestClear = room; bestD = d; }
+      }
+    }
+    return best;
+  };
+  const stands = [];
+  const seenStand = new Uint8Array(floor.length);
+  for (const monster of spawns){
+    const stand = standFor(monster);
+    if (stand < 0 || seenStand[stand]) continue;
+    seenStand[stand] = 1;
+    stands.push(stand);
+  }
+  const claimed = new Uint8Array(spawns.length);
+  let have = spawnGain(claimed, spawns, centerOf(here).x, centerOf(here).y, radius);
+  for (let i = 0; i < spawns.length; i++) if (hits(spawns[i], centerOf(here).x, centerOf(here).y, radius)) claimed[i] = 1;
+  const chosen = [];
+  while (have < goal && stands.length){
+    let bestI = -1, bestN = 0, bestClear = -1;
+    for (let i = 0; i < stands.length; i++){
+      const at = centerOf(stands[i]);
+      let n = 0;
+      for (let m = 0; m < spawns.length; m++) if (!claimed[m] && hits(spawns[m], at.x, at.y, radius)) n++;
+      const room = clearance[stands[i]];
+      if (n > bestN || (n === bestN && n > 0 && room > bestClear)){ bestN = n; bestI = i; bestClear = room; }
+    }
+    if (bestN <= 0) break;
+    const cell = stands.splice(bestI, 1)[0];
+    chosen.push(cell);
+    const at = centerOf(cell);
+    for (let m = 0; m < spawns.length; m++) if (!claimed[m] && hits(spawns[m], at.x, at.y, radius)){ claimed[m] = 1; have++; }
+  }
+  const nodes = [here, ...chosen];
+  const blank = new Uint8Array(floor.length);
+  const always = new Uint8Array(floor.length);
+  always.fill(1);
+  const reachFrom = nodes.map(cell => shortest(floor, cw, ch, { x: cell % cw, y: (cell / cw) | 0 }, blank, blank, always, clearance));
+  const link = (a, b) => {
+    if (a === b) return 0;
+    const dist = reachFrom[a].dist[nodes[b]];
+    if (!Number.isFinite(dist)) return 1e9;
+    return reachFrom[a].hops[nodes[b]] || 1e9;
+  };
+  const tourLength = order => order.reduce((sum, stop, index) => sum + link(index === 0 ? 0 : order[index - 1], stop), 0);
+  const twoOpt = order => {
+    for (let guard = 0; guard < 40; guard++){
+      let bestDelta = 0, bi = -1, bj = -1;
+      for (let i = 0; i < order.length; i++){
+        for (let j = i + 1; j < order.length; j++){
+          const prev = i === 0 ? 0 : order[i - 1];
+          const next = j + 1 < order.length ? order[j + 1] : -1;
+          const before = link(prev, order[i]) + (next < 0 ? 0 : link(order[j], next));
+          const after = link(prev, order[j]) + (next < 0 ? 0 : link(order[i], next));
+          if (after - before < bestDelta){ bestDelta = after - before; bi = i; bj = j; }
+        }
+      }
+      if (bi < 0) break;
+      const reversed = order.slice(bi, bj + 1).reverse();
+      order.splice(bi, bj - bi + 1, ...reversed);
+    }
+  };
+  const tours = [];
+  for (let team = 0; team < teamCount; team++) tours.push({ order: [] });
+  const used = new Uint8Array(nodes.length);
+  used[0] = 1;
+  while (used.some((flag, index) => index > 0 && !flag)){
+    let owner = 0, least = Infinity;
+    for (let i = 0; i < tours.length; i++){
+      const len = tourLength(tours[i].order);
+      if (len < least){ least = len; owner = i; }
+    }
+    const tour = tours[owner];
+    let bestAdd = Infinity, bestStop = -1, bestAt = 0;
+    for (let stop = 1; stop < nodes.length; stop++){
+      if (used[stop] || link(0, stop) >= 1e9) continue;
+      for (let at = 0; at <= tour.order.length; at++){
+        const prev = at === 0 ? 0 : tour.order[at - 1];
+        const next = at === tour.order.length ? -1 : tour.order[at];
+        const add = link(prev, stop) + (next < 0 ? 0 : link(stop, next) - link(prev, next));
+        if (add < bestAdd){ bestAdd = add; bestStop = stop; bestAt = at; }
+      }
+    }
+    if (bestStop < 0) break;
+    tour.order.splice(bestAt, 0, bestStop);
+    used[bestStop] = 1;
+  }
+  for (const tour of tours) twoOpt(tour.order);
+  for (let pass = 0; pass < 24 && tours.length > 1; pass++){
+    let longI = 0, shortI = 0;
+    for (let i = 0; i < tours.length; i++){
+      if (tourLength(tours[i].order) > tourLength(tours[longI].order)) longI = i;
+      if (tourLength(tours[i].order) < tourLength(tours[shortI].order)) shortI = i;
+    }
+    const longLen = tourLength(tours[longI].order), shortLen = tourLength(tours[shortI].order);
+    if (longLen <= shortLen * 1.1 || tours[longI].order.length < 2) break;
+    let choice = null, bestImbalance = longLen - shortLen;
+    for (let s = 0; s < tours[longI].order.length; s++){
+      const stop = tours[longI].order[s];
+      const without = tours[longI].order.filter((_, index) => index !== s);
+      const newLong = tourLength(without);
+      let bestAt = 0, bestAdd = Infinity;
+      for (let at = 0; at <= tours[shortI].order.length; at++){
+        const prev = at === 0 ? 0 : tours[shortI].order[at - 1];
+        const next = at === tours[shortI].order.length ? -1 : tours[shortI].order[at];
+        const add = link(prev, stop) + (next < 0 ? 0 : link(stop, next) - link(prev, next));
+        if (add < bestAdd){ bestAdd = add; bestAt = at; }
+      }
+      const imbalance = Math.abs(newLong - (shortLen + bestAdd));
+      if (imbalance < bestImbalance){ bestImbalance = imbalance; choice = { without, stop, bestAt }; }
+    }
+    if (!choice) break;
+    tours[longI].order = choice.without;
+    tours[shortI].order.splice(choice.bestAt, 0, choice.stop);
+    twoOpt(tours[longI].order);
+    twoOpt(tours[shortI].order);
+  }
   const got = new Uint8Array(spawns.length);
   const walked = new Uint8Array(floor.length);
   const trail = new Uint8Array(floor.length);
   const exempt = new Uint8Array(floor.length);
   const hot = new Uint8Array(floor.length);
   const reach = radius / CELL;
-  const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
   let covered = spawnPaint(got, spawns, centerOf(here).x, centerOf(here).y, radius);
   walked[here] = 1;
   paintBar(trail, cw, ch, here, reach);
-  const room = clearanceOf(floor, cw, ch);
-  const teams = [];
-  for (let team = 0; team < teamCount; team++) teams.push({ here, cells: [here], retraces: [false], steps: 0 });
-  let backs = 0, steps = 0;
-  const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
-  let stop = 'legs';
-  let legs = 0;
-  while (covered < goal && legs < 500){
+  const runners = tours.map(tour => ({ stops: tour.order.slice(), next: 0, hereNode: 0, here, cells: [here], retraces: [false], steps: 0 }));
+  const cellsBetween = (fromNode, toNode) => pathFrom(reachFrom[fromNode].prev, cw, { x: nodes[fromNode] % cw, y: (nodes[fromNode] / cw) | 0 }, nodes[toNode]) || [];
+  let backs = 0, steps = 0, stop = 'done';
+  let guard = 0;
+  while (runners.some(runner => runner.next < runner.stops.length) && guard++ < 800){
     let mover = null, least = Infinity;
-    for (const team of teams) if (team.steps < least){ least = team.steps; mover = team; }
-    legs++;
+    for (const runner of runners){
+      if (runner.next >= runner.stops.length || runner.steps > least) continue;
+      least = runner.steps;
+      mover = runner;
+    }
+    if (!mover) break;
+    const targetNode = mover.stops[mover.next++];
+    const target = nodes[targetNode];
+    if (target === mover.here) continue;
     exempt.fill(0);
     paintBar(exempt, cw, ch, mover.here, reach);
-    markHot(hot, spawns, got, floor, cw, ch, radius);
-    const search = shortest(floor, cw, ch, { x: mover.here % cw, y: (mover.here / cw) | 0 }, trail, exempt, hot, room);
-    const longest = teams.reduce((max, team) => Math.max(max, team.steps), 0);
-    let best = -1, bestScore = 0;
-    for (const spot of spawnSpots(got, spawns, floor, cw, ch, stride)){
-      const dist = search.dist[spot];
-      const hops = search.hops[spot];
-      if (!Number.isFinite(dist) || dist === 0 || !hops) continue;
-      const at = centerOf(spot);
-      const added = spawnGain(got, spawns, at.x, at.y, radius);
-      if (!added) continue;
-      const overshoot = Math.max(0, mover.steps + hops - Math.max(longest, mover.steps));
-      const score = (added / dist) / (1 + overshoot / Math.max(8, hops));
-      if (score > bestScore){ bestScore = score; best = spot; }
-    }
-    if (best < 0){ stop = 'no-candidate'; break; }
-    const legCells = pathFrom(search.prev, cw, { x: mover.here % cw, y: (mover.here / cw) | 0 }, best);
-    if (!legCells){ stop = 'no-path'; break; }
+    const legCells = cellsBetween(mover.hereNode, targetNode);
+    if (!legCells.length){ stop = 'no-path'; continue; }
     for (const cell of legCells){
       steps++;
       if (walked[cell]) backs++;
@@ -361,12 +478,14 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
     }
     for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
     mover.steps += legCells.length;
-    mover.here = best;
+    mover.here = target;
+    mover.hereNode = targetNode;
+    if (covered >= goal) break;
   }
-  const routes = teams.map(team => simplifyRuns(team.cells.map((cell, index) => ({
+  const routes = runners.map(runner => simplifyRuns(runner.cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,
     y: ((cell / cw) | 0) * CELL + CELL / 2,
-    retrace: team.retraces[index],
+    retrace: runner.retraces[index],
   })))).filter(route => route.length > 1);
   const points = routes[0] ? routes[0] : [];
   points.teams = routes;
