@@ -1,9 +1,13 @@
 (function(){
 'use strict';
 const CELL = 5;
-const ALONG = 250;
-const TIME = 1000;
-const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
+const BEAM = 5;
+const BRANCH = 5;
+const PACK_GEO = 1000;
+const DIAG = 7071;
+const ORTH = 5000;
+const BALANCE = 1.12;
+const MOVES = [[1, 0, ORTH], [-1, 0, ORTH], [0, 1, ORTH], [0, -1, ORTH], [1, 1, DIAG], [1, -1, DIAG], [-1, 1, DIAG], [-1, -1, DIAG]];
 const cache = new Map();
 
 function inside(w, h, x, y){
@@ -30,16 +34,13 @@ function hits(monster, x, y, radius){
   return dx * dx + dy * dy <= radius * radius;
 }
 
-function spawnGain(got, spawns, x, y, radius){
-  let added = 0;
-  for (let i = 0; i < spawns.length; i++) if (!got[i] && hits(spawns[i], x, y, radius)) added++;
-  return added;
-}
-
 function spawnPaint(got, spawns, x, y, radius){
   let added = 0;
+  const r2 = radius * radius;
   for (let i = 0; i < spawns.length; i++){
-    if (got[i] || !hits(spawns[i], x, y, radius)) continue;
+    if (got[i]) continue;
+    const dx = spawns[i].x - x, dy = spawns[i].y - y;
+    if (dx * dx + dy * dy > r2) continue;
     got[i] = 1;
     added++;
   }
@@ -63,41 +64,49 @@ function spawnKey(spawns){
   return hash >>> 0;
 }
 
-function heapPush(heap, i, d){
-  heap.push(i, d);
-  let n = heap.length / 2 - 1;
-  while (n > 0){
-    const p = (n - 1) >> 1;
-    if (heap[p * 2 + 1] <= d) break;
-    heap[n * 2] = heap[p * 2];
-    heap[n * 2 + 1] = heap[p * 2 + 1];
-    n = p;
-  }
-  heap[n * 2] = i;
-  heap[n * 2 + 1] = d;
+function heapLess(h, a, b){
+  const ao = a << 2, bo = b << 2;
+  const at = h[ao + 1], bt = h[bo + 1];
+  if (at !== bt) return at < bt;
+  const ag = h[ao + 2], bg = h[bo + 2];
+  if (ag !== bg) return ag < bg;
+  return h[ao + 3] < h[bo + 3];
 }
 
-function heapPop(heap){
-  const i = heap[0], d = heap[1];
-  const li = heap[heap.length - 2], ld = heap.pop(), _ = heap.pop();
-  if (!heap.length) return [i, d];
-  let n = 0;
-  heap[0] = li;
-  heap[1] = ld;
-  for (;;){
-    let best = n;
-    const l = n * 2 + 1, r = l + 1;
-    if (l < heap.length / 2 && heap[l * 2 + 1] < heap[best * 2 + 1]) best = l;
-    if (r < heap.length / 2 && heap[r * 2 + 1] < heap[best * 2 + 1]) best = r;
-    if (best === n) break;
-    const si = heap[n * 2], sd = heap[n * 2 + 1];
-    heap[n * 2] = heap[best * 2];
-    heap[n * 2 + 1] = heap[best * 2 + 1];
-    heap[best * 2] = si;
-    heap[best * 2 + 1] = sd;
-    n = best;
+function heapPush(h, node, t, g, n){
+  let i = h.length >> 2;
+  h.push(node, t, g, n);
+  while (i > 0){
+    const p = (i - 1) >> 1;
+    if (!heapLess(h, i, p)) break;
+    const io = i << 2, po = p << 2;
+    const sn = h[po], st = h[po + 1], sg = h[po + 2], su = h[po + 3];
+    h[po] = h[io]; h[po + 1] = h[io + 1]; h[po + 2] = h[io + 2]; h[po + 3] = h[io + 3];
+    h[io] = sn; h[io + 1] = st; h[io + 2] = sg; h[io + 3] = su;
+    i = p;
   }
-  return [i, d];
+}
+
+function heapPop(h){
+  const node = h[0], t = h[1], g = h[2], n = h[3];
+  const nu = h.pop(), ng = h.pop(), nt = h.pop(), nn = h.pop();
+  if (!h.length) return [node, t, g, n];
+  h[0] = nn; h[1] = nt; h[2] = ng; h[3] = nu;
+  let i = 0;
+  const count = h.length >> 2;
+  for (;;){
+    let b = i;
+    const l = i * 2 + 1, r = l + 1;
+    if (l < count && heapLess(h, l, b)) b = l;
+    if (r < count && heapLess(h, r, b)) b = r;
+    if (b === i) break;
+    const io = i << 2, bo = b << 2;
+    const sn = h[io], st = h[io + 1], sg = h[io + 2], su = h[io + 3];
+    h[io] = h[bo]; h[io + 1] = h[bo + 1]; h[io + 2] = h[bo + 2]; h[io + 3] = h[bo + 3];
+    h[bo] = sn; h[bo + 1] = st; h[bo + 2] = sg; h[bo + 3] = su;
+    i = b;
+  }
+  return [node, t, g, n];
 }
 
 function paintBar(grid, cw, ch, cell, reach){
@@ -113,26 +122,6 @@ function paintBar(grid, cw, ch, cell, reach){
   }
 }
 
-function markHot(hot, spawns, got, floor, cw, ch, radius){
-  hot.fill(0);
-  const lim = Math.ceil(radius / CELL), r2 = radius * radius;
-  for (let i = 0; i < spawns.length; i++){
-    if (got[i]) continue;
-    const sx = spawns[i].x, sy = spawns[i].y;
-    const cx = sx / CELL | 0, cy = sy / CELL | 0;
-    for (let dy = -lim; dy <= lim; dy++){
-      for (let dx = -lim; dx <= lim; dx++){
-        const x = cx + dx, y = cy + dy;
-        if (!inside(cw, ch, x, y)) continue;
-        const cell = y * cw + x;
-        if (!floor[cell] || hot[cell]) continue;
-        const px = x * CELL + CELL / 2 - sx, py = y * CELL + CELL / 2 - sy;
-        if (px * px + py * py <= r2) hot[cell] = 1;
-      }
-    }
-  }
-}
-
 function clearanceOf(floor, cw, ch){
   const dist = new Uint16Array(cw * ch);
   const queue = [];
@@ -141,8 +130,8 @@ function clearanceOf(floor, cw, ch){
       const i = y * cw + x;
       if (!floor[i]) continue;
       let edge = false;
-      for (const [dx, dy] of N4){
-        const nx = x + dx, ny = y + dy;
+      for (let k = 0; k < 4; k++){
+        const nx = x + MOVES[k][0], ny = y + MOVES[k][1];
         if (!inside(cw, ch, nx, ny) || !floor[ny * cw + nx]){ edge = true; break; }
       }
       if (edge){ dist[i] = 1; queue.push(i); }
@@ -150,8 +139,8 @@ function clearanceOf(floor, cw, ch){
   }
   for (let q = 0; q < queue.length; q++){
     const i = queue[q], x = i % cw, y = (i / cw) | 0;
-    for (const [dx, dy] of N4){
-      const nx = x + dx, ny = y + dy;
+    for (let k = 0; k < 4; k++){
+      const nx = x + MOVES[k][0], ny = y + MOVES[k][1];
       if (!inside(cw, ch, nx, ny)) continue;
       const v = ny * cw + nx;
       if (!floor[v] || dist[v]) continue;
@@ -162,87 +151,13 @@ function clearanceOf(floor, cw, ch){
   return dist;
 }
 
-function shortest(floor, w, h, start, trail, exempt, hot, clearance){
-  const n = w * h;
-  const dist = new Float64Array(n);
-  const hops = new Int32Array(n);
-  dist.fill(Infinity);
-  const prev = new Int32Array(n);
-  prev.fill(-1);
-  const si = start.y * w + start.x;
-  dist[si] = 0;
-  const heap = [];
-  heapPush(heap, si, 0);
-  while (heap.length){
-    const [u, d] = heapPop(heap);
-    if (d !== dist[u]) continue;
-    const x = u % w, y = (u / w) | 0;
-    for (const [dx, dy] of N4){
-      const nx = x + dx, ny = y + dy;
-      if (!inside(w, h, nx, ny)) continue;
-      const v = ny * w + nx;
-      if (!floor[v]) continue;
-      const time = trail[v] && !exempt[v] ? ALONG : hot[v] ? 0 : 1;
-      const room = clearance[v];
-      const center = room <= 1 ? 8 : room === 2 ? 3 : 0;
-      const nd = d + time * TIME + 1 + center;
-      if (nd < dist[v]){
-        dist[v] = nd;
-        hops[v] = hops[u] + 1;
-        prev[v] = u;
-        heapPush(heap, v, nd);
-      }
-    }
-  }
-  return { dist, prev, hops };
-}
-
-function pathFrom(prev, w, start, goal){
-  const cells = [];
-  let i = goal;
-  const stop = start.y * w + start.x;
-  while (i !== stop){
-    if (prev[i] < 0) return null;
-    cells.push(i);
-    i = prev[i];
-    if (cells.length > prev.length) return null;
-  }
-  cells.reverse();
-  return cells;
-}
-
-function spawnSpots(got, spawns, floor, cw, ch, stride){
-  const seen = new Uint8Array(cw * ch);
-  const list = [];
-  let n = 0;
-  for (let i = 0; i < spawns.length; i++){
-    if (got[i]) continue;
-    const x = Math.max(0, Math.min(cw - 1, spawns[i].x / CELL | 0));
-    const y = Math.max(0, Math.min(ch - 1, spawns[i].y / CELL | 0));
-    let cell = y * cw + x;
-    if (!floor[cell]) continue;
-    if (seen[cell]) continue;
-    seen[cell] = 1;
-    if (n++ % stride === 0) list.push(cell);
-  }
-  if (!list.length){
-    for (let i = 0; i < spawns.length; i++){
-      if (got[i]) continue;
-      const x = Math.max(0, Math.min(cw - 1, spawns[i].x / CELL | 0));
-      const y = Math.max(0, Math.min(ch - 1, spawns[i].y / CELL | 0));
-      if (floor[y * cw + x]){ list.push(y * cw + x); break; }
-    }
-  }
-  return list;
-}
-
 function simplify(points){
   if (points.length < 3) return points;
   const keep = new Uint8Array(points.length);
   keep[0] = 1;
   keep[points.length - 1] = 1;
   const stack = [[0, points.length - 1]];
-  const eps = 0.8;
+  const eps = 0.4;
   while (stack.length){
     const [a, b] = stack.pop();
     const from = points[a], to = points[b];
@@ -274,12 +189,12 @@ function simplifyRuns(points){
   return out;
 }
 
-function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCount){
+function plan(layout, entrance, boss, spawns, targetPct, radius, teamCount){
   const width = layout.width, height = layout.height;
   const bytes = Uint8Array.from(atob(layout.mask), c => c.charCodeAt(0));
-  let floorCount = 0;
   const cw = Math.ceil(width / CELL), ch = Math.ceil(height / CELL);
   const count = new Uint16Array(cw * ch);
+  let floorCount = 0;
   for (let y = 0; y < height; y++){
     for (let x = 0; x < width; x++){
       const i = y * width + x;
@@ -292,460 +207,507 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
   const floor = new Uint8Array(cw * ch);
   for (let i = 0; i < floor.length; i++) if (count[i] >= 3) floor[i] = 1;
   if (!spawns.length) return [];
-  const radius = radiusSubtiles;
-  const goal = Math.ceil(spawns.length * targetPct / 100);
-  const snap = (point) => {
+  const n = cw * ch;
+  const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
+  const snap = point => {
     if (!point) return -1;
     const x = Math.max(0, Math.min(cw - 1, point.x / CELL | 0));
     const y = Math.max(0, Math.min(ch - 1, point.y / CELL | 0));
     if (floor[y * cw + x]) return y * cw + x;
     let best = -1, bestD = Infinity;
-    for (let i = 0; i < floor.length; i++){
+    for (let i = 0; i < n; i++){
       if (!floor[i]) continue;
       const d = (i % cw - x) ** 2 + ((i / cw | 0) - y) ** 2;
       if (d < bestD){ bestD = d; best = i; }
     }
     return best;
   };
-  let here = snap(entrance);
+  const here = snap(entrance);
   if (here < 0) return [];
-  const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
+  const seenReach = new Uint8Array(n);
+  const parentEnt = new Int32Array(n);
+  const depthEnt = new Int32Array(n);
+  parentEnt.fill(-1);
+  const stack = [here];
+  seenReach[here] = 1;
+  for (let q = 0; q < stack.length; q++){
+    const i = stack[q], x = i % cw, y = (i / cw) | 0;
+    for (let k = 0; k < 4; k++){
+      const nx = x + MOVES[k][0], ny = y + MOVES[k][1];
+      if (!inside(cw, ch, nx, ny)) continue;
+      const v = ny * cw + nx;
+      if (seenReach[v] || !floor[v]) continue;
+      seenReach[v] = 1;
+      parentEnt[v] = i;
+      depthEnt[v] = depthEnt[i] + 1;
+      stack.push(v);
+    }
+  }
+  const LOG = 12;
+  const up = Array.from({ length: LOG }, () => new Int32Array(n).fill(-1));
+  for (let i = 0; i < n; i++) up[0][i] = parentEnt[i];
+  for (let k = 1; k < LOG; k++){
+    for (let i = 0; i < n; i++){
+      const mid = up[k - 1][i];
+      up[k][i] = mid >= 0 ? up[k - 1][mid] : -1;
+    }
+  }
+  const lift = (cell, dist) => {
+    for (let k = 0; dist > 0 && cell >= 0; k++, dist >>= 1) if (dist & 1) cell = up[k][cell];
+    return cell;
+  };
+  const lca = (a, b) => {
+    if (a < 0 || b < 0) return -1;
+    if (depthEnt[a] < depthEnt[b]){ const s = a; a = b; b = s; }
+    a = lift(a, depthEnt[a] - depthEnt[b]);
+    if (a === b) return a;
+    for (let k = LOG - 1; k >= 0; k--){
+      if (up[k][a] !== up[k][b]){ a = up[k][a]; b = up[k][b]; }
+    }
+    return parentEnt[a];
+  };
+  const passedBy = (teamCell, standCell) => {
+    if (teamCell < 0 || standCell < 0) return false;
+    if (depthEnt[teamCell] <= depthEnt[standCell] + 8) return false;
+    const fork = lca(teamCell, standCell);
+    return fork >= 0 && depthEnt[fork] + 8 < depthEnt[teamCell];
+  };
+  const behindOf = state => {
+    if (state.covered >= goal) return 0;
+    let nBehind = 0;
+    for (let m = 0; m < spawnN; m++){
+      const s = stand[m];
+      if (s < 0 || state.got[m]) continue;
+      let waiting = false;
+      for (let t = 0; t < teamCount; t++) if (!passedBy(state.pos[t], s)){ waiting = true; break; }
+      if (!waiting) nBehind++;
+    }
+    return nBehind;
+  };
+  for (let i = 0; i < n; i++) if (!seenReach[i]) floor[i] = 0;
   const clearance = clearanceOf(floor, cw, ch);
-  const standFor = monster => {
-    const lim = Math.ceil(radius / CELL);
-    const cx = monster.x / CELL | 0, cy = monster.y / CELL | 0;
+  const reach = radius / CELL;
+  const spawnN = spawns.length;
+  const covStart = new Int32Array(spawnN + 1);
+  const covTmp = new Array(spawnN);
+  const stand = new Int32Array(spawnN);
+  stand.fill(-1);
+  const lim = Math.ceil(radius / CELL);
+  let covTotal = 0;
+  for (let m = 0; m < spawnN; m++){
+    const list = [];
+    const sx = spawns[m].x, sy = spawns[m].y;
+    const cx = sx / CELL | 0, cy = sy / CELL | 0;
     let best = -1, bestClear = -1, bestD = Infinity;
     for (let dy = -lim; dy <= lim; dy++){
       for (let dx = -lim; dx <= lim; dx++){
         const x = cx + dx, y = cy + dy;
-        if (!inside(cw, ch, x, y) || !floor[y * cw + x]) continue;
-        const at = centerOf(y * cw + x);
-        if (!hits(monster, at.x, at.y, radius)) continue;
-        const room = clearance[y * cw + x];
-        const d = dx * dx + dy * dy;
-        if (room > bestClear || (room === bestClear && d < bestD)){ best = y * cw + x; bestClear = room; bestD = d; }
+        if (!inside(cw, ch, x, y)) continue;
+        const cell = y * cw + x;
+        if (!floor[cell]) continue;
+        const at = centerOf(cell);
+        const px = at.x - sx, py = at.y - sy;
+        if (px * px + py * py > radius * radius) continue;
+        list.push(cell);
+        const room = clearance[cell];
+        const d = px * px + py * py;
+        if (room > bestClear || (room === bestClear && d < bestD)){ best = cell; bestClear = room; bestD = d; }
       }
     }
-    return best;
-  };
-  const stands = [];
-  const seenStand = new Uint8Array(floor.length);
-  for (const monster of spawns){
-    const stand = standFor(monster);
-    if (stand < 0 || seenStand[stand]) continue;
-    seenStand[stand] = 1;
-    stands.push(stand);
+    covTmp[m] = list;
+    covTotal += list.length;
+    stand[m] = best;
   }
-  const claimed = new Uint8Array(spawns.length);
-  let have = spawnGain(claimed, spawns, centerOf(here).x, centerOf(here).y, radius);
-  for (let i = 0; i < spawns.length; i++) if (hits(spawns[i], centerOf(here).x, centerOf(here).y, radius)) claimed[i] = 1;
-  const chosen = [];
-  while (have < goal && stands.length){
-    let bestI = -1, bestN = 0, bestClear = -1;
-    for (let i = 0; i < stands.length; i++){
-      const at = centerOf(stands[i]);
-      let n = 0;
-      for (let m = 0; m < spawns.length; m++) if (!claimed[m] && hits(spawns[m], at.x, at.y, radius)) n++;
-      const room = clearance[stands[i]];
-      if (n > bestN || (n === bestN && n > 0 && room > bestClear)){ bestN = n; bestI = i; bestClear = room; }
-    }
-    if (bestN <= 0) break;
-    const cell = stands.splice(bestI, 1)[0];
-    chosen.push(cell);
-    const at = centerOf(cell);
-    for (let m = 0; m < spawns.length; m++) if (!claimed[m] && hits(spawns[m], at.x, at.y, radius)){ claimed[m] = 1; have++; }
+  const covCells = new Int32Array(covTotal);
+  let cursor = 0;
+  for (let m = 0; m < spawnN; m++){
+    covStart[m] = cursor;
+    const list = covTmp[m];
+    for (let i = 0; i < list.length; i++) covCells[cursor++] = list[i];
   }
-  const nodes = [here, ...chosen];
-  const blank = new Uint8Array(floor.length);
-  const always = new Uint8Array(floor.length);
-  always.fill(1);
-  const reachFrom = nodes.map(cell => shortest(floor, cw, ch, { x: cell % cw, y: (cell / cw) | 0 }, blank, blank, always, clearance));
-  const nNodes = nodes.length;
-  const pos = nodes.map(centerOf);
-  const hop = Array.from({ length: nNodes }, () => new Float64Array(nNodes));
-  for (let a = 0; a < nNodes; a++){
-    const dist = reachFrom[a].dist, hops = reachFrom[a].hops;
-    for (let b = 0; b < nNodes; b++){
-      if (a === b) continue;
-      hop[a][b] = Number.isFinite(dist[nodes[b]]) ? (hops[nodes[b]] || 1e9) : 1e9;
+  covStart[spawnN] = cursor;
+
+  const got0 = new Uint8Array(spawnN);
+  const origin = centerOf(here);
+  let covered0 = spawnPaint(got0, spawns, origin.x, origin.y, radius);
+  let possible = covered0;
+  for (let m = 0; m < spawnN; m++) if (!got0[m] && stand[m] >= 0) possible++;
+  const goal = Math.min(Math.ceil(spawnN * targetPct / 100), possible);
+  if (goal <= 0) return [];
+
+  const timeOf = new Int32Array(n);
+  const geoOf = new Int32Array(n);
+  const nudgeOf = new Int32Array(n);
+  const prev = new Int32Array(n);
+  const seen = new Int32Array(n);
+  const settled = new Int32Array(n);
+  const hot = new Uint8Array(n);
+  const mouthAt = new Int32Array(n);
+  const freshAt = new Int32Array(n);
+  let gen = 1, mouthGen = 1, freshGen = 1;
+  const hotMark = monsterGot => {
+    hot.fill(0);
+    for (let m = 0; m < spawnN; m++){
+      if (monsterGot[m]) continue;
+      for (let k = covStart[m]; k < covStart[m + 1]; k++) hot[covCells[k]] = 1;
     }
+  };
+  const exemptAt = (cell, tip) => {
+    const dx = (cell % cw) - (tip % cw);
+    const dy = ((cell / cw) | 0) - ((tip / cw) | 0);
+    return dx * dx + dy * dy <= reach * reach;
+  };
+  const nudgeOfCell = cell => {
+    const room = clearance[cell];
+    if (room >= 4) return 0;
+    if (room === 3) return 1;
+    if (room === 2) return 2;
+    return 4;
+  };
+  const searchFrom = (start, trail) => {
+    gen++;
+    if (gen > 0x6fffffff){ seen.fill(0); settled.fill(0); gen = 1; }
+    timeOf[start] = 0;
+    geoOf[start] = 0;
+    nudgeOf[start] = 0;
+    prev[start] = -1;
+    seen[start] = gen;
+    const heap = [];
+    const foundMouths = searchFrom.mouths;
+    foundMouths.length = 0;
+    mouthGen++;
+    if (mouthGen > 0x6fffffff){ mouthAt.fill(0); mouthGen = 1; }
+    let firstTime = Infinity, firstGeo = Infinity, mouthCount = 0;
+    heapPush(heap, start, 0, 0, 0);
+    while (heap.length){
+      const [node, t, g, nud] = heapPop(heap);
+      if (seen[node] !== gen) continue;
+      if (t !== timeOf[node] || g !== geoOf[node] || nud !== nudgeOf[node]) continue;
+      if (settled[node] === gen) continue;
+      if (mouthCount >= 1 && t > firstTime + 140 && g > firstGeo) break;
+      if (mouthCount >= BRANCH) break;
+      settled[node] = gen;
+      if (freshAt[node] === freshGen){
+        let on = false;
+        for (let c = prev[node], guard = 0; c !== start && c >= 0 && guard < n; c = prev[c], guard++){
+          if (mouthAt[c] === mouthGen){ on = true; break; }
+        }
+        if (!on && mouthAt[node] !== mouthGen){
+          mouthAt[node] = mouthGen;
+          foundMouths.push(node);
+          mouthCount++;
+          if (t < firstTime || (t === firstTime && g < firstGeo)){ firstTime = t; firstGeo = g; }
+          if (mouthCount >= BRANCH) break;
+        }
+      }
+      const x = node % cw, y = (node / cw) | 0;
+      const baseT = timeOf[node], baseG = geoOf[node], baseN = nudgeOf[node];
+      for (let k = 0; k < MOVES.length; k++){
+        const dx = MOVES[k][0], dy = MOVES[k][1], milli = MOVES[k][2];
+        const nx = x + dx, ny = y + dy;
+        if (!inside(cw, ch, nx, ny)) continue;
+        const v = ny * cw + nx;
+        if (!floor[v]) continue;
+        if (dx && dy && (!floor[y * cw + nx] || !floor[ny * cw + x])) continue;
+        const stepT = trail[v] && !exemptAt(v, start) ? 250 : hot[v] ? 0 : 1;
+        const nt = baseT + stepT;
+        const ng = baseG + milli;
+        const nn = baseN + nudgeOfCell(v);
+        if (seen[v] === gen){
+          const ot = timeOf[v], og = geoOf[v], on = nudgeOf[v];
+          if (nt > ot || (nt === ot && ng > og) || (nt === ot && ng === og && nn >= on)) continue;
+        }
+        seen[v] = gen;
+        timeOf[v] = nt;
+        geoOf[v] = ng;
+        nudgeOf[v] = nn;
+        prev[v] = node;
+        heapPush(heap, v, nt, ng, nn);
+      }
+    }
+  };
+  searchFrom.mouths = [];
+  const pathTo = (start, target) => {
+    const rev = [];
+    for (let c = target, guard = 0; c !== start; c = prev[c], guard++){
+      if (c < 0 || seen[c] !== gen || guard > n) return null;
+      rev.push(c);
+    }
+    rev.reverse();
+    return rev;
+  };
+  const capFor = (state, team) => {
+    if (teamCount === 1) return Infinity;
+    let otherMax = 0;
+    for (let t = 0; t < teamCount; t++) if (t !== team && state.dist[t] > otherMax) otherMax = state.dist[t];
+    if (otherMax <= 0) return 360;
+    return Math.max(24, BALANCE * otherMax - state.dist[team]);
+  };
+  const chooseTargets = (start, cap) => {
+    const mouths = searchFrom.mouths;
+    if (!mouths.length) return [];
+    const capMilli = cap === Infinity ? Infinity : cap * PACK_GEO;
+    const targets = [];
+    for (let i = 0; i < mouths.length; i++){
+      const mouth = mouths[i];
+      if (settled[mouth] !== gen && mouthAt[mouth] !== mouthGen) continue;
+      if (geoOf[mouth] <= capMilli){ targets.push(mouth); continue; }
+      const path = pathTo(start, mouth);
+      if (!path || !path.length) continue;
+      let acc = 0, last = -1;
+      for (let p = 0; p < path.length; p++){
+        const step = p === 0 ? geoOf[path[0]] : geoOf[path[p]] - geoOf[path[p - 1]];
+        if (acc + step > capMilli && last >= 0) break;
+        acc += step;
+        last = path[p];
+      }
+      if (last >= 0) targets.push(last);
+    }
+    return targets;
+  };
+  const lagging = state => {
+    let team = 0;
+    for (let t = 1; t < teamCount; t++) if (state.dist[t] < state.dist[team]) team = t;
+    return team;
+  };
+  const expand = state => {
+    if (state.covered >= goal) return [];
+    const team = lagging(state);
+    const start = state.pos[team];
+    hotMark(state.got);
+    freshGen++;
+    if (freshGen > 0x6fffffff){ freshAt.fill(0); freshGen = 1; }
+    for (let m = 0; m < spawnN; m++){
+      const s = stand[m];
+      if (s >= 0 && !state.got[m]) freshAt[s] = freshGen;
+    }
+    searchFrom(start, state.trail);
+    const cap = capFor(state, team);
+    const targets = chooseTargets(start, cap);
+    const out = [];
+    for (let i = 0; i < targets.length; i++){
+      const target = targets[i];
+      if (target === start) continue;
+      const path = pathTo(start, target);
+      if (!path || !path.length) continue;
+      const got = state.got.slice();
+      let covered = state.covered;
+      const leg = [];
+      const legRet = [];
+      let addedMilli = 0;
+      let addedTime = 0;
+      let prevCell = start;
+      for (let p = 0; p < path.length; p++){
+        const cell = path[p];
+        const retrace = state.trail[cell] && !exemptAt(cell, start) ? 1 : 0;
+        const stepT = retrace ? 250 : hot[cell] ? 0 : 1;
+        const dx = (cell % cw) - (prevCell % cw);
+        const dy = ((cell / cw) | 0) - ((prevCell / cw) | 0);
+        const milli = dx && dy ? DIAG : ORTH;
+        if (leg.length && cap !== Infinity && (addedMilli + milli) / PACK_GEO > cap + 0.01) break;
+        leg.push(cell);
+        legRet.push(retrace);
+        addedTime += stepT;
+        addedMilli += milli;
+        prevCell = cell;
+        const at = centerOf(cell);
+        covered += spawnPaint(got, spawns, at.x, at.y, radius);
+        if (covered >= goal) break;
+      }
+      if (!leg.length) continue;
+      const pos = state.pos.slice();
+      const dist = state.dist.slice();
+      pos[team] = leg[leg.length - 1];
+      dist[team] += addedMilli / PACK_GEO;
+      const trail = state.trail.slice();
+      for (let p = 0; p < leg.length; p++) paintBar(trail, cw, ch, leg[p], reach);
+      let travel = 0;
+      for (let t = 0; t < teamCount; t++) travel += dist[t];
+      out.push({
+        parent: state,
+        team,
+        leg,
+        legRet,
+        pos,
+        dist,
+        time: state.time + addedTime,
+        travel,
+        got,
+        covered,
+        trail,
+      });
+    }
+    return out;
+  };
+  const posKey = state => {
+    let h = 2166136261;
+    for (let t = 0; t < teamCount; t++) h = Math.imul(h ^ state.pos[t], 16777619);
+    for (let i = 0; i < spawnN; i++) if (state.got[i]) h = Math.imul(h ^ (i + 1), 16777619);
+    return h >>> 0;
+  };
+  const rankTime = state => {
+    if (state.rank == null) state.rank = state.time + behindOf(state) * 2000;
+    return state.rank;
+  };
+  const better = (a, b) => {
+    const ta = rankTime(a), tb = rankTime(b);
+    if (ta !== tb) return ta < tb;
+    return a.travel < b.travel;
+  };
+  const rootPos = new Int32Array(teamCount);
+  const rootDist = new Float64Array(teamCount);
+  rootPos.fill(here);
+  const rootTrail = new Uint8Array(n);
+  paintBar(rootTrail, cw, ch, here, reach);
+  let root = {
+    parent: null,
+    team: -1,
+    leg: null,
+    legRet: null,
+    pos: rootPos,
+    dist: rootDist,
+    time: 0,
+    travel: 0,
+    got: got0,
+    covered: covered0,
+    trail: rootTrail,
+  };
+  let bestDone = covered0 >= goal ? root : null;
+  let bestAny = root;
+  const consider = state => {
+    if (state.covered > bestAny.covered || (state.covered === bestAny.covered && better(state, bestAny))) bestAny = state;
+    if (state.covered >= goal && (!bestDone || better(state, bestDone))) bestDone = state;
+  };
+  let beam = [root];
+  const started = Date.now();
+  const dominated = new Map();
+  dominated.set(posKey(root), 0);
+  for (let iter = 0; iter < 700 && beam.length; iter++){
+    if (Date.now() - started > 2000) break;
+    const cands = [];
+    for (let b = 0; b < beam.length; b++){
+      const state = beam[b];
+      if (state.covered >= goal) continue;
+      if (bestDone && !better(state, bestDone)) continue;
+      const nexts = expand(state);
+      for (let i = 0; i < nexts.length; i++){
+        const nxt = nexts[i];
+        const key = posKey(nxt);
+        const prevTime = dominated.get(key);
+        if (prevTime !== undefined && prevTime <= nxt.time) continue;
+        dominated.set(key, nxt.time);
+        consider(nxt);
+        if (nxt.covered < goal) cands.push(nxt);
+      }
+    }
+    if (!cands.length) break;
+    cands.sort((a, b) => rankTime(a) - rankTime(b) || a.travel - b.travel);
+    const nextBeam = [];
+    const local = new Set();
+    for (let i = 0; i < cands.length && nextBeam.length < BEAM; i++){
+      if (bestDone && !better(cands[i], bestDone)) continue;
+      const key = posKey(cands[i]);
+      if (local.has(key)) continue;
+      local.add(key);
+      nextBeam.push(cands[i]);
+    }
+    if (!nextBeam.length) break;
+    beam = nextBeam;
   }
-  const active = new Uint8Array(nNodes);
-  active.fill(1);
-  for (let s = 1; s < nNodes; s++) if (hop[0][s] >= 1e9) active[s] = 0;
-  const r2 = radius * radius;
-  const isClose = Array.from({ length: nNodes }, () => new Uint8Array(nNodes * nNodes));
-  for (let a = 0; a < nNodes; a++){
-    if (!active[a]) continue;
-    for (let b = a + 1; b < nNodes; b++){
-      if (!active[b]) continue;
-      const ax = pos[a].x, ay = pos[a].y, bx = pos[b].x, by = pos[b].y;
-      const dx = bx - ax, dy = by - ay, span = dx * dx + dy * dy;
-      for (let c = 0; c < nNodes; c++){
-        if (!active[c] || c === a || c === b) continue;
-        const px = pos[c].x - ax, py = pos[c].y - ay;
-        const t = span === 0 ? 0 : Math.max(0, Math.min(1, (px * dx + py * dy) / span));
-        const qx = ax + t * dx - pos[c].x, qy = ay + t * dy - pos[c].y;
-        if (qx * qx + qy * qy > r2) continue;
-        isClose[c][a * nNodes + b] = 1;
-        isClose[c][b * nNodes + a] = 1;
-      }
+  let winner = bestDone;
+  if (!winner || winner.covered < goal){
+    let state = bestAny;
+    let stalls = 0;
+    for (let guard = 0; guard < 80 && state.covered < goal && Date.now() - started < 2200; guard++){
+      const nexts = expand(state);
+      if (!nexts.length) break;
+      nexts.sort((a, b) => b.covered - a.covered || a.time - b.time || a.travel - b.travel);
+      const nxt = nexts[0];
+      if (nxt.covered <= state.covered && nxt.travel <= state.travel + 1) break;
+      if (nxt.covered <= state.covered) stalls++;
+      else stalls = 0;
+      if (stalls > teamCount * 3) break;
+      state = nxt;
+      consider(state);
     }
+    winner = bestDone || state;
   }
-  const teamOf = new Int16Array(nNodes);
-  const nearByTeam = Array.from({ length: teamCount }, () => Array.from({ length: nNodes }, () => new Uint16Array(nNodes)));
-  const rebuildNear = () => {
-    for (let t = 0; t < teamCount; t++) for (let a = 0; a < nNodes; a++) nearByTeam[t][a].fill(0);
-    for (let c = 0; c < nNodes; c++){
-      if (c !== 0 && !active[c]) continue;
-      const row = isClose[c];
-      const teams = nearByTeam;
-      for (let t = 0; t < teams.length; t++){
-        const bucket = teams[t];
-        for (let a = 0; a < nNodes; a++){
-          const base = a * nNodes;
-          const line = bucket[a];
-          for (let b = 0; b < nNodes; b++) if (row[base + b]) line[b]++;
-        }
-      }
-    }
-  };
-  // Each skipped stand the straight link passes through adds this many hops of cost.
-  const PENALTY = 12;
-  const crossExtra = (a, b, ex1, ex2, team) => {
-    let count = nearByTeam[team][a][b];
-    const index = a * nNodes + b;
-    const exempt = (node) => node >= 0 && (node === 0 || (active[node] && teamOf[node] === team)) && isClose[node][index];
-    if (exempt(ex1)) count--;
-    if (ex2 !== ex1 && exempt(ex2)) count--;
-    return count > 0 ? count : 0;
-  };
-  const edgeCost = (order, i, team) => {
-    const a = i === 0 ? 0 : order[i - 1];
-    const b = order[i];
-    const h = hop[a][b];
-    if (h >= 1e9) return 1e9;
-    const exPrev = i === 0 ? -1 : (i === 1 ? 0 : order[i - 2]);
-    const exNext = i + 1 < order.length ? order[i + 1] : -1;
-    return h + crossExtra(a, b, exPrev, exNext, team) * PENALTY;
-  };
-  const metricOf = (order, team) => {
-    let total = 0;
-    for (let i = 0; i < order.length; i++){
-      const cost = edgeCost(order, i, team);
-      if (cost >= 1e9) return 1e9;
-      total += cost;
-    }
-    return total;
-  };
-  const hopOf = order => {
-    let total = 0;
-    for (let i = 0; i < order.length; i++){
-      const a = i === 0 ? 0 : order[i - 1];
-      const h = hop[a][order[i]];
-      if (h >= 1e9) return 1e9;
-      total += h;
-    }
-    return total;
-  };
-  const twoOpt = (order, team) => {
-    const limit = order.length > 70 ? 6 : 20;
-    for (let guard = 0; guard < limit; guard++){
-      let bestDelta = 0, best = null;
-      const base = metricOf(order, team);
-      for (let i = 0; i < order.length; i++){
-        for (let j = i + 1; j < order.length; j++){
-          const prev = i === 0 ? 0 : order[i - 1];
-          const next = j + 1 < order.length ? order[j + 1] : -1;
-          const before = hop[prev][order[i]] + (next < 0 ? 0 : hop[order[j]][next]);
-          const after = hop[prev][order[j]] + (next < 0 ? 0 : hop[order[i]][next]);
-          if (after > before + PENALTY * order.length) continue;
-          const trial = order.slice(0, i).concat(order.slice(i, j + 1).reverse(), order.slice(j + 1));
-          const delta = metricOf(trial, team) - base;
-          if (delta < bestDelta){ bestDelta = delta; best = trial; }
-        }
-      }
-      if (!best) break;
-      order.splice(0, order.length, ...best);
-    }
-  };
-  const orOpt = (order, team) => {
-    const limit = order.length > 70 ? 3 : 8;
-    for (let guard = 0; guard < limit; guard++){
-      const baseHop = hopOf(order);
-      let bestHop = baseHop, bestMetric = Infinity, best = null;
-      for (let len = 1; len <= 3; len++){
-        if (order.length <= len) continue;
-        for (let i = 0; i + len <= order.length; i++){
-          const block = order.slice(i, i + len);
-          const rest = order.slice(0, i).concat(order.slice(i + len));
-          const chunks = len === 1 ? [block] : [block, block.slice().reverse()];
-          for (let c = 0; c < chunks.length; c++){
-            const chunk = chunks[c];
-            for (let j = 0; j <= rest.length; j++){
-              if (c === 0 && j === i) continue;
-              const trial = rest.slice(0, j).concat(chunk, rest.slice(j));
-              const h = hopOf(trial);
-              if (h > bestHop || h >= baseHop) continue;
-              const metric = metricOf(trial, team);
-              if (h === bestHop && metric >= bestMetric) continue;
-              bestHop = h;
-              bestMetric = metric;
-              best = trial;
-            }
-          }
-        }
-      }
-      if (!best || bestHop >= baseHop) break;
-      order.splice(0, order.length, ...best);
-    }
-  };
-  rebuildNear();
-  const tours = [];
-  for (let team = 0; team < teamCount; team++) tours.push({ order: [] });
-  {
-    const seen = new Uint8Array(nNodes);
-    let left = 0;
-    for (let s = 1; s < nNodes; s++) if (active[s]) left++;
-    while (left > 0){
-      let owner = 0, least = Infinity;
-      for (let i = 0; i < tours.length; i++){
-        const len = hopOf(tours[i].order);
-        if (len < least){ least = len; owner = i; }
-      }
-      const order = tours[owner].order;
-      const baseMetric = metricOf(order, owner);
-      let bestAdd = Infinity, bestStop = -1, bestAt = 0;
-      for (let stop = 1; stop < nNodes; stop++){
-        if (!active[stop] || seen[stop]) continue;
-        for (let at = 0; at <= order.length; at++){
-          const trial = order.slice();
-          trial.splice(at, 0, stop);
-          const add = metricOf(trial, owner) - baseMetric;
-          if (add < bestAdd){ bestAdd = add; bestStop = stop; bestAt = at; }
-        }
-      }
-      if (bestStop < 0) break;
-      order.splice(bestAt, 0, bestStop);
-      seen[bestStop] = 1;
-      teamOf[bestStop] = owner;
-      left--;
-    }
-  }
-  let geomReady = false;
-  const spanOf = order => geomReady ? geomOf(order) : hopOf(order);
-  const polish = () => {
-    for (let ti = 0; ti < tours.length; ti++){
-      twoOpt(tours[ti].order, ti);
-      orOpt(tours[ti].order, ti);
-      twoOpt(tours[ti].order, ti);
-    }
-  };
-  const paired = (orderA, orderB) => {
-    const hops = [hopOf(orderA), hopOf(orderB)];
-    const geoms = [spanOf(orderA), spanOf(orderB)];
-    const hopRatio = Math.max(...hops) / Math.max(1, Math.min(...hops));
-    const geomRatio = Math.max(...geoms) / Math.max(1, Math.min(...geoms));
-    return Math.max(hopRatio, geomRatio);
-  };
-  const rebalance = () => {
-    for (let pass = 0; pass < 20 && tours.length > 1; pass++){
-      let longI = 0, shortI = 1 % tours.length;
-      const lens = tours.map(tour => Math.max(hopOf(tour.order), spanOf(tour.order) / CELL));
-      for (let i = 0; i < tours.length; i++){
-        if (lens[i] > lens[longI]) longI = i;
-        if (lens[i] < lens[shortI]) shortI = i;
-      }
-      if (longI === shortI) break;
-      if (tours[shortI].order.length === 0){
-        if (tours[longI].order.length < 2) break;
-        const stop = tours[longI].order.pop();
-        tours[shortI].order.push(stop);
-        teamOf[stop] = shortI;
-        rebuildNear();
-        continue;
-      }
-      const now = paired(tours[longI].order, tours[shortI].order);
-      if (now <= 1.08 || tours[longI].order.length < 2) break;
-      let choice = null, bestRatio = now;
-      for (let s = 0; s < tours[longI].order.length; s++){
-        const stop = tours[longI].order[s];
-        const without = tours[longI].order.filter((_, index) => index !== s);
-        for (let at = 0; at <= tours[shortI].order.length; at++){
-          const moved = tours[shortI].order.slice();
-          moved.splice(at, 0, stop);
-          const ratio = paired(without, moved);
-          if (ratio < bestRatio){ bestRatio = ratio; choice = { without, moved, stop }; }
-        }
-      }
-      if (!choice) break;
-      tours[longI].order = choice.without;
-      tours[shortI].order = choice.moved;
-      teamOf[choice.stop] = shortI;
-      rebuildNear();
-    }
-  };
-  const legCache = new Map();
-  const legCells = (a, b) => {
-    const key = a * nNodes + b;
-    const cached = legCache.get(key);
-    if (cached) return cached;
-    const cells = pathFrom(reachFrom[a].prev, cw, { x: nodes[a] % cw, y: (nodes[a] / cw) | 0 }, nodes[b]) || [];
-    legCache.set(key, cells);
-    return cells;
-  };
-  const pointsOf = order => {
-    const pts = [pos[0]];
-    let prev = 0;
-    for (let s = 0; s < order.length; s++){
-      const cells = legCells(prev, order[s]);
-      for (let k = 0; k < cells.length; k++) pts.push(centerOf(cells[k]));
-      prev = order[s];
-    }
-    return simplify(pts);
-  };
-  const geomOf = order => {
-    const pts = pointsOf(order);
-    let total = 0;
-    for (let i = 1; i < pts.length; i++) total += Math.hypot(pts[i].x - pts[i - 1].x, pts[i].y - pts[i - 1].y);
-    return total;
-  };
-  geomReady = true;
-  const lim = Math.ceil(radius / CELL);
-  const coverCount = orders => {
-    const seen = new Uint8Array(floor.length);
-    seen[nodes[0]] = 1;
-    for (let t = 0; t < orders.length; t++){
-      let prev = 0;
-      const order = orders[t];
-      for (let s = 0; s < order.length; s++){
-        const cells = legCells(prev, order[s]);
-        for (let k = 0; k < cells.length; k++) seen[cells[k]] = 1;
-        prev = order[s];
-      }
-    }
-    let total = 0;
-    for (let m = 0; m < spawns.length; m++){
-      const sx = spawns[m].x, sy = spawns[m].y;
-      const cx = sx / CELL | 0, cy = sy / CELL | 0;
-      let hit = false;
-      for (let dy = -lim; dy <= lim && !hit; dy++){
-        const y = cy + dy;
-        if (y < 0 || y >= ch) continue;
-        for (let dx = -lim; dx <= lim; dx++){
-          const x = cx + dx;
-          if (x < 0 || x >= cw || !seen[y * cw + x]) continue;
-          const ddx = x * CELL + CELL / 2 - sx, ddy = y * CELL + CELL / 2 - sy;
-          if (ddx * ddx + ddy * ddy <= r2){ hit = true; break; }
-        }
-      }
-      if (hit) total++;
-    }
-    return total;
-  };
-  const prune = () => {
-    const minStops = 1;
-    for (let guard = 0; guard < nNodes; guard++){
-      const orders = tours.map(tour => tour.order);
-      const base = coverCount(orders);
-      const safeGoal = Math.min(spawns.length, Math.ceil(spawns.length * (targetPct / 100 + 0.012)));
-      const need = base < goal ? base : Math.min(base, safeGoal);
-      const ranked = [];
-      for (let ti = 0; ti < tours.length; ti++){
-        const order = tours[ti].order;
-        if (order.length <= minStops) continue;
-        for (let s = 0; s < order.length; s++){
-          const trial = order.filter((_, index) => index !== s);
-          const saving = hopOf(order) - hopOf(trial);
-          if (saving < 0) continue;
-          ranked.push({ ti, trial, saving, stop: order[s] });
-        }
-      }
-      ranked.sort((a, b) => b.saving - a.saving);
-      let picked = null;
-      for (let i = 0; i < ranked.length; i++){
-        const cand = ranked[i];
-        const nextOrders = orders.slice();
-        nextOrders[cand.ti] = cand.trial;
-        if (coverCount(nextOrders) < need) continue;
-        picked = cand;
-        break;
-      }
-      if (!picked) break;
-      tours[picked.ti].order = picked.trial;
-      active[picked.stop] = 0;
-    }
-  };
-  const copyOrders = () => tours.map(tour => tour.order.slice());
-  const restoreOrders = saved => { for (let i = 0; i < tours.length; i++) tours[i].order = saved[i]; };
-  polish();
-  rebalance();
-  prune();
-  rebuildNear();
-  const kept = copyOrders();
-  const keptCover = coverCount(tours.map(tour => tour.order));
-  polish();
-  if (coverCount(tours.map(tour => tour.order)) < keptCover) restoreOrders(kept);
-  const balanced = copyOrders();
-  const balancedCover = coverCount(tours.map(tour => tour.order));
-  const coverFloor = Math.min(balancedCover, Math.ceil(spawns.length * (targetPct / 100 + 0.008)));
-  rebalance();
-  if (coverCount(tours.map(tour => tour.order)) < coverFloor) restoreOrders(balanced);
-  const got = new Uint8Array(spawns.length);
-  const walked = new Uint8Array(floor.length);
-  const trail = new Uint8Array(floor.length);
-  const exempt = new Uint8Array(floor.length);
-  const hot = new Uint8Array(floor.length);
-  const reach = radius / CELL;
-  let covered = spawnPaint(got, spawns, centerOf(here).x, centerOf(here).y, radius);
-  walked[here] = 1;
-  paintBar(trail, cw, ch, here, reach);
-  const runners = tours.map(tour => ({ stops: tour.order.slice(), next: 0, hereNode: 0, here, cells: [here], retraces: [false], steps: 0 }));
-  const cellsBetween = (fromNode, toNode) => pathFrom(reachFrom[fromNode].prev, cw, { x: nodes[fromNode] % cw, y: (nodes[fromNode] / cw) | 0 }, nodes[toNode]) || [];
-  let backs = 0, steps = 0, stop = 'done';
-  let guard = 0;
-  while (runners.some(runner => runner.next < runner.stops.length) && guard++ < 800){
-    let mover = null, least = Infinity;
-    for (const runner of runners){
-      if (runner.next >= runner.stops.length || runner.steps > least) continue;
-      least = runner.steps;
-      mover = runner;
-    }
-    if (!mover) break;
-    const targetNode = mover.stops[mover.next++];
-    const target = nodes[targetNode];
-    if (target === mover.here) continue;
-    exempt.fill(0);
-    paintBar(exempt, cw, ch, mover.here, reach);
-    const legCells = cellsBetween(mover.hereNode, targetNode);
-    if (!legCells.length){ stop = 'no-path'; continue; }
-    for (const cell of legCells){
+  const chain = [];
+  for (let s = winner; s; s = s.parent) chain.push(s);
+  chain.reverse();
+  const walked = Array.from({ length: teamCount }, () => ({ cells: [here], ret: [0] }));
+  let backs = 0, steps = 0;
+  for (let i = 0; i < chain.length; i++){
+    const s = chain[i];
+    if (!s.leg) continue;
+    const bucket = walked[s.team];
+    for (let p = 0; p < s.leg.length; p++){
+      bucket.cells.push(s.leg[p]);
+      bucket.ret.push(s.legRet[p]);
       steps++;
-      if (walked[cell]) backs++;
-      mover.retraces.push(!!(trail[cell] && !exempt[cell]));
-      walked[cell] = 1;
-      mover.cells.push(cell);
-      const at = centerOf(cell);
-      covered += spawnPaint(got, spawns, at.x, at.y, radius);
+      if (s.legRet[p]) backs++;
     }
-    for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
-    mover.steps += legCells.length;
-    mover.here = target;
-    mover.hereNode = targetNode;
-    const coverStop = Math.min(spawns.length, goal + Math.ceil(spawns.length * 0.012));
-    if (teamCount < 2 && covered >= coverStop) break;
   }
-  const routes = runners.map(runner => simplifyRuns(runner.cells.map((cell, index) => ({
+  const routes = walked.map(bucket => simplifyRuns(bucket.cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,
     y: ((cell / cw) | 0) * CELL + CELL / 2,
-    retrace: runner.retraces[index],
+    retrace: !!bucket.ret[index],
   })))).filter(route => route.length > 1);
+  const needHits = spawnN * (targetPct / 100 - 0.01);
+  const r2 = radius * radius;
+  const segDist = (ax, ay, bx, by, x, y) => {
+    const dx = bx - ax, dy = by - ay, span = dx * dx + dy * dy;
+    const t = span === 0 ? 0 : Math.max(0, Math.min(1, ((x - ax) * dx + (y - ay) * dy) / span));
+    const px = ax + t * dx - x, py = ay + t * dy - y;
+    return px * px + py * py;
+  };
+  let hitNow = winner.covered;
+  if (routes.length){
+    const countHits = () => {
+      let nHit = 0;
+      for (let m = 0; m < spawnN; m++){
+        const x = spawns[m].x, y = spawns[m].y;
+        let ok = false;
+        for (let p = 0; p < routes.length && !ok; p++){
+          const path = routes[p];
+          for (let i = 1; i < path.length; i++){
+            if (segDist(path[i - 1].x, path[i - 1].y, path[i].x, path[i].y, x, y) <= r2){ ok = true; break; }
+          }
+        }
+        if (ok) nHit++;
+      }
+      return nHit;
+    };
+    hitNow = countHits();
+    for (let guard = 0; guard < 4 && hitNow < needHits - 1e-6; guard++){
+      let bestM = -1, bestExtra = Infinity, bestPath = -1, bestAt = 1;
+      for (let m = 0; m < spawnN; m++){
+        if (stand[m] < 0) continue;
+        const at = centerOf(stand[m]);
+        let covered = false, extra = Infinity, pathI = -1, segI = 1;
+        for (let p = 0; p < routes.length && !covered; p++){
+          const path = routes[p];
+          for (let i = 1; i < path.length; i++){
+            if (segDist(path[i - 1].x, path[i - 1].y, path[i].x, path[i].y, spawns[m].x, spawns[m].y) <= r2){ covered = true; break; }
+            const ax = path[i - 1].x, ay = path[i - 1].y, bx = path[i].x, by = path[i].y;
+            const add = Math.hypot(at.x - ax, at.y - ay) + Math.hypot(bx - at.x, by - at.y) - Math.hypot(bx - ax, by - ay);
+            if (add < extra){ extra = add; pathI = p; segI = i; }
+          }
+        }
+        if (!covered && extra < bestExtra){ bestExtra = extra; bestM = m; bestPath = pathI; bestAt = segI; }
+      }
+      if (bestM < 0 || bestExtra > 180) break;
+      const at = centerOf(stand[bestM]);
+      const flag = !!routes[bestPath][bestAt].retrace;
+      routes[bestPath].splice(bestAt, 0, { x: at.x, y: at.y, retrace: flag });
+      hitNow = countHits();
+    }
+  }
   const points = routes[0] ? routes[0] : [];
   points.teams = routes;
-  points.covered = spawns.length ? covered / spawns.length : 0;
+  points.covered = spawnN ? hitNow / spawnN : 0;
   points.backtrack = steps ? backs / steps : 0;
-  points.stop = covered >= goal ? 'done' : stop;
-  points.spawns = spawns.length;
+  points.spawns = spawnN;
   return points;
 }
 
