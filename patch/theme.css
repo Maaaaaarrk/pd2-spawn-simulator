@@ -100,6 +100,7 @@ canvas.globe,#embers{border:0;box-shadow:none;background:none;cursor:default;hei
 .map-legend i{display:inline-block;flex:none}
 .mk-portal{width:10px;height:16px;border-radius:50%;background:radial-gradient(#ffd9a8,#ff5a2e 40%,#a3160f 80%);box-shadow:0 0 0 1px #c9a24f,0 0 7px rgba(255,70,40,.7)}
 .mk-boss{width:16px;height:16px;border-radius:50%;background:#1a0907 radial-gradient(circle at 50% 45%,#efe6cf 0 34%,transparent 37%);box-shadow:0 0 0 2px #c9a24f}
+.mk-boss.mk-inferred{box-shadow:none;outline:2px dashed #c9a24f;outline-offset:0}
 .mk-none{display:none!important}
 
 /* ---------- tables ---------- */

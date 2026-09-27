@@ -16,13 +16,15 @@ function portal(ctx, x, y, r){
   ctx.strokeStyle = '#c9a24f'; ctx.lineWidth = 1; ctx.beginPath(); ctx.ellipse(x, y, r * .62 + 1.5, r + 1.5, 0, 0, Math.PI * 2); ctx.stroke();
   ctx.restore();
 }
-function skull(ctx, x, y, r){
+function skull(ctx, x, y, r, inferred){
   ctx.save();
   ctx.shadowColor = 'rgba(0,0,0,.9)'; ctx.shadowBlur = 6;
   const ring = ctx.createLinearGradient(0, y - r, 0, y + r);
   ring.addColorStop(0, '#fff2c4'); ring.addColorStop(.45, '#c9a24f'); ring.addColorStop(1, '#5c4520');
   ctx.fillStyle = '#1a0907'; ctx.beginPath(); ctx.arc(x, y, r, 0, Math.PI * 2); ctx.fill();
-  ctx.shadowBlur = 0; ctx.lineWidth = Math.max(1.5, r * .18); ctx.strokeStyle = ring; ctx.stroke();
+  ctx.shadowBlur = 0; ctx.lineWidth = Math.max(1.5, r * .18); ctx.strokeStyle = ring;
+  if (inferred) ctx.setLineDash([Math.max(2, r * .35), Math.max(2, r * .28)]);
+  ctx.stroke(); ctx.setLineDash([]);
   const s = r * .62;                                     // skull inside the ring
   ctx.fillStyle = '#efe6cf';
   ctx.beginPath(); ctx.arc(x, y - s * .18, s * .72, Math.PI, 0); ctx.lineTo(x + s * .72, y + s * .2);
@@ -45,12 +47,13 @@ function legend(m){
   const key = m ? m.id + (m.custom_geometry ? ':custom' : '') : '';
   if (el.dataset.key === key) return; el.dataset.key = key;
   const k = m && !m.custom_geometry && window.PD2MapMarkers[m.id];
-  const bosses = k ? k.boss.map(b => b.name) : [];
+  const bosses = k ? k.boss.map(b => b.name) : [], inferred = k && k.boss.some(b => b.inferred);
   el.replaceChildren();
   const item = (cls, text) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = cls; s.append(i, document.createTextNode(text)); el.append(s); };
   if (!k){ item('mk-none', 'Entrance and boss positions are only known for the reference layouts.'); return; }
   item('mk-portal', k.entrance ? (k.entrance.source === 'portal' ? 'Entrance portal' : 'Entrance (arrival point)') : 'No entrance recorded');
-  item('mk-boss', bosses.length ? 'Boss: ' + bosses.join(', ') : 'No boss preset in this map file (spawned by game code)');
+  item(inferred ? 'mk-boss mk-inferred' : 'mk-boss', !bosses.length ? 'Boss position unknown: no single boss spawn point in this map file'
+    : inferred ? 'Boss spawn point (inferred from the map file): ' + bosses.join(', ') : 'Boss: ' + bosses.join(', '));
 }
 window.drawMapMarkers = function(ctx, m, ox, oy, scale){
   legend(m);
@@ -58,6 +61,6 @@ window.drawMapMarkers = function(ctx, m, ox, oy, scale){
   const at = p => [ox + (p.x + .5) * scale, oy + (p.y + .5) * scale];
   const showNames = scale >= 1.6;
   if (k.entrance){ const [x, y] = at(k.entrance), r = clamp(scale * 5, 7, 20); portal(ctx, x, y, r); if (showNames) label(ctx, 'Entrance', x + r * .8 + 5, y); }
-  for (const b of k.boss){ const [x, y] = at(b), r = clamp(scale * 4.5, 7, 18); skull(ctx, x, y, r); if (showNames) label(ctx, b.name, x + r + 5, y); }
+  for (const b of k.boss){ const [x, y] = at(b), r = clamp(scale * 4.5, 7, 18); skull(ctx, x, y, r, b.inferred); if (showNames) label(ctx, b.name, x + r + 5, y); }
 };
 })();
