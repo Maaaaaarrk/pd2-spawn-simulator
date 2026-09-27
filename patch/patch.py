@@ -82,7 +82,7 @@ markup = markup[:m.start()] + ('<main>\n<header class="page-head">'
 # ---- walking clear: target percent and the radius the group clears around the route
 markup = rep(markup, '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>',
     '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>'
-    '<label>Clear target (%)<input id="clearTarget" type="number" min="1" max="100" step="1" value="90"></label>'
+    '<label>Spawn clear (%)<input id="clearTarget" type="number" min="1" max="100" step="1" value="90"></label>'
     '<label>Group radius (subtiles)<input id="clearRadius" type="number" min="1" max="80" step="1" value="15"></label>', where='clear controls')
 
 # ---- boss and entrance markers (markers.py reads them from the installed DS1 presets)
@@ -133,7 +133,7 @@ for i, line in enumerate(lines):
 draw_end = "role==='unique'?'#e6d39a':'#f4efe4';ctx.lineWidth=1;ctx.stroke()}}}"
 n = sum(l.count(draw_end) for l in lines if len(l) <= 5000)
 if n != 1: raise SystemExit(f'map draw end found {n} times')
-lines = [l.replace(draw_end, draw_end[:-1] + 'window.drawMapMarkers&&drawMapMarkers(ctx,m,ox,oy,scale)}') if len(l) <= 5000 else l for l in lines]
+lines = [l.replace(draw_end, draw_end[:-1] + 'window.drawMapMarkers&&drawMapMarkers(ctx,m,ox,oy,scale,points)}') if len(l) <= 5000 else l for l in lines]
 missing = [k for k, v in hits.items() if not v]
 if missing: raise SystemExit(f'main code swaps not found: {missing}')
 main_script = '\n'.join(lines)
@@ -148,7 +148,7 @@ for old, new in [
     ('.q-normal,.q-superior{color:#e7f0f4}', '.q-normal,.q-superior{color:#dcd6c6}'), ('.q-low{color:#8a96a0}', '.q-low{color:#6f685b}'),
     ('.q-gold{color:#f6c975}', '.q-gold{color:#e6d39a}'), ('.q-potion{color:#a6bbc7}', '.q-potion{color:#8f8775}'),
     ('linear-gradient(90deg,#b3372e,#f6c975)', 'linear-gradient(90deg,#b3372e,#e6d39a)'),
-    ('  ctx.globalAlpha = 1;\n  if (!last) return;', '  ctx.globalAlpha = 1;\n  if (window.drawMapMarkers) drawMapMarkers(ctx, m, ox, oy, scale);\n  if (!last) return;'),
+    ('  ctx.globalAlpha = 1;\n  if (!last) return;', '  ctx.globalAlpha = 1;\n  if (window.drawMapMarkers) drawMapMarkers(ctx, m, ox, oy, scale, mobs);\n  if (!last) return;'),
 ]:
     if old not in loot: raise SystemExit(f'loot: {old!r} not found')
     loot = loot.replace(old, new)

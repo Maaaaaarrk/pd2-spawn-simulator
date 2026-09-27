@@ -15,8 +15,9 @@ It writes `simulator.bin` and bumps the `?v=` version in `index.html`. Every rep
 build that changed underneath it stops with an error instead of half-applying.
 
 Boss and entrance positions come from each layout's DS1 presets. The clear route is drawn on that same map.
-Clear target is how much of the floor the group must cover, and group radius is how far around the route that
-coverage reaches. The line prefers new ground; walking back over a corridor costs more than walking forward.
+Clear target is how many of the simulated monsters the group must kill, and group radius is how far
+from the route a monster still counts. The line prefers new ground; walking back over a corridor costs
+more than walking forward.
 To regenerate `patch/markers.json` (needs the installed PD2 data and the map_compare tools; paths are at the
 top of the script):
 
