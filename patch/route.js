@@ -1,7 +1,7 @@
 (function(){
 'use strict';
 const CELL = 5;
-const ALONG = 40;
+const ALONG = 250;
 const TIME = 1000;
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const cache = new Map();
@@ -17,9 +17,11 @@ function readNumber(id){
 function settings(){
   const target = readNumber('clearTarget');
   const radius = readNumber('clearRadius');
+  const teams = readNumber('clearTeams');
   return {
     target: Number.isFinite(target) ? Math.max(1, Math.min(100, target)) : 90,
     radius: Number.isFinite(radius) ? Math.max(1, Math.min(200, radius)) : 35,
+    teams: Number.isFinite(teams) ? Math.max(1, Math.min(6, Math.round(teams))) : 1,
   };
 }
 
@@ -270,7 +272,7 @@ function simplifyRuns(points){
   return out;
 }
 
-function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
+function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCount){
   const width = layout.width, height = layout.height;
   const bytes = Uint8Array.from(atob(layout.mask), c => c.charCodeAt(0));
   let floorCount = 0;
@@ -316,49 +318,56 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   walked[here] = 1;
   paintBar(trail, cw, ch, here, reach);
   const room = clearanceOf(floor, cw, ch);
-  const cells = [here];
-  const retraces = [false];
+  const teams = [];
+  for (let team = 0; team < teamCount; team++) teams.push({ here, cells: [here], retraces: [false] });
   let backs = 0, steps = 0;
   const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
   let stop = 'legs';
-  for (let leg = 0; leg < 500 && covered < goal; leg++){
-    exempt.fill(0);
-    paintBar(exempt, cw, ch, here, reach);
-    markHot(hot, spawns, got, floor, cw, ch, radius);
-    const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, trail, exempt, hot, room);
-    let best = -1, bestScore = 0;
-    const pool = spawnSpots(got, spawns, floor, cw, ch, stride);
-    let reachable = 0;
-    for (const spot of pool){
-      const dist = search.dist[spot];
-      if (!Number.isFinite(dist) || dist === 0) continue;
-      reachable++;
-      const at = centerOf(spot);
-      const added = spawnGain(got, spawns, at.x, at.y, radius);
-      if (!added) continue;
-      const score = added / dist;
-      if (score > bestScore){ bestScore = score; best = spot; }
+  let legs = 0;
+  while (covered < goal && legs < 500){
+    let progress = false;
+    for (const team of teams){
+      if (covered >= goal || legs >= 500) break;
+      legs++;
+      exempt.fill(0);
+      paintBar(exempt, cw, ch, team.here, reach);
+      markHot(hot, spawns, got, floor, cw, ch, radius);
+      const search = shortest(floor, cw, ch, { x: team.here % cw, y: (team.here / cw) | 0 }, trail, exempt, hot, room);
+      let best = -1, bestScore = 0;
+      for (const spot of spawnSpots(got, spawns, floor, cw, ch, stride)){
+        const dist = search.dist[spot];
+        if (!Number.isFinite(dist) || dist === 0) continue;
+        const at = centerOf(spot);
+        const added = spawnGain(got, spawns, at.x, at.y, radius);
+        if (!added) continue;
+        const score = added / dist;
+        if (score > bestScore){ bestScore = score; best = spot; }
+      }
+      if (best < 0) continue;
+      const legCells = pathFrom(search.prev, cw, { x: team.here % cw, y: (team.here / cw) | 0 }, best);
+      if (!legCells) continue;
+      progress = true;
+      for (const cell of legCells){
+        steps++;
+        if (walked[cell]) backs++;
+        team.retraces.push(!!(trail[cell] && !exempt[cell]));
+        walked[cell] = 1;
+        team.cells.push(cell);
+        const at = centerOf(cell);
+        covered += spawnPaint(got, spawns, at.x, at.y, radius);
+      }
+      for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
+      team.here = best;
     }
-    if (best < 0){ stop = 'no-candidate:' + pool.length + ':' + reachable; break; }
-    const legCells = pathFrom(search.prev, cw, { x: here % cw, y: (here / cw) | 0 }, best);
-    if (!legCells){ stop = 'no-path'; break; }
-    for (const cell of legCells){
-      steps++;
-      if (walked[cell]) backs++;
-      retraces.push(!!(trail[cell] && !exempt[cell]));
-      walked[cell] = 1;
-      cells.push(cell);
-      const at = centerOf(cell);
-      covered += spawnPaint(got, spawns, at.x, at.y, radius);
-    }
-    for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
-    here = best;
+    if (!progress){ stop = 'no-candidate'; break; }
   }
-  const points = simplifyRuns(cells.map((cell, index) => ({
+  const routes = teams.map(team => simplifyRuns(team.cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,
     y: ((cell / cw) | 0) * CELL + CELL / 2,
-    retrace: retraces[index],
-  })));
+    retrace: team.retraces[index],
+  })))).filter(route => route.length > 1);
+  const points = routes[0] ? routes[0] : [];
+  points.teams = routes;
   points.covered = spawns.length ? covered / spawns.length : 0;
   points.backtrack = steps ? backs / steps : 0;
   points.stop = covered >= goal ? 'done' : stop;
@@ -372,10 +381,10 @@ window.PD2ClearRoute = function(layout, entrance, boss, spawns){
   const monsters = normalizeSpawns(spawns);
   if (!monsters.length) return [];
   const choice = settings();
-  const key = layout.id + ':' + choice.target + ':' + choice.radius + ':' + spawnKey(monsters);
+  const key = layout.id + ':' + choice.target + ':' + choice.radius + ':' + choice.teams + ':' + spawnKey(monsters);
   if (cache.has(key)) return cache.get(key);
   let points = [];
-  try { points = plan(layout, entrance, boss, monsters, choice.target, choice.radius); }
+  try { points = plan(layout, entrance, boss, monsters, choice.target, choice.radius, choice.teams); }
   catch (error) { points = []; }
   cache.set(key, points);
   return points;

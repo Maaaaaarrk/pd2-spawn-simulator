@@ -42,20 +42,24 @@ function label(ctx, text, x, y){
   ctx.fillStyle = '#e6d39a'; ctx.fillText(text, x, y);
   ctx.restore();
 }
-function legend(m, hasRoute, routeCovered, spawnCount, routeRetrace){
+const TEAM_COLORS = ['#ff4d3a', '#3dde7a', '#e6c15a', '#c77dff', '#ff9f43', '#3ec6ff'];
+function legend(m, route, spawnCount){
   const el = document.getElementById('mapMarkerLegend'); if (!el) return;
-  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 35 };
-  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + ':' + choice.target + ':' + choice.radius + ':' + (hasRoute ? Math.round((routeCovered || 0) * 100) : 0) + (routeRetrace ? ':re' : '') : '';
+  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 35, teams: 1 };
+  const teams = route && route.teams && route.teams.length ? route.teams : route && route.length > 1 ? [route] : [];
+  const retrace = teams.some(path => path.some(point => point.retrace));
+  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + ':' + choice.target + ':' + choice.radius + ':' + choice.teams + ':' + teams.length + ':' + (route && route.covered ? Math.round(route.covered * 100) : 0) + (retrace ? ':re' : '') : '';
   if (el.dataset.key === key) return; el.dataset.key = key;
   const k = m && !m.custom_geometry && window.PD2MapMarkers[m.id];
   const bosses = k ? k.boss.map(b => b.name) : [], inferred = k && k.boss.some(b => b.inferred);
   el.replaceChildren();
-  const item = (cls, text) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = cls; s.append(i, document.createTextNode(text)); el.append(s); };
+  const item = (cls, text, color) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = cls; if (color) i.style.background = color; s.append(i, document.createTextNode(text)); el.append(s); };
   if (!k){ item('mk-none', 'Entrance and boss positions are only known for the reference layouts.'); return; }
   if (!spawnCount) item('mk-route', 'Clear route: run a simulation first');
-  else if (hasRoute){
-    item('mk-route', 'Clear route · ' + Math.round((routeCovered || 0) * 100) + '% of spawns');
-    if (routeRetrace) item('mk-retrace', 'Already cleared');
+  else if (teams.length){
+    item('mk-route', 'Clear route · ' + Math.round((route.covered || 0) * 100) + '% of spawns', teams.length === 1 ? TEAM_COLORS[0] : '');
+    teams.forEach((path, index) => { if (teams.length > 1) item('mk-route', 'Team ' + (index + 1), TEAM_COLORS[index % TEAM_COLORS.length]); });
+    if (retrace) item('mk-retrace', 'Already cleared');
   }
   item('mk-portal', k.entrance ? (k.entrance.source === 'portal' ? 'Entrance portal' : 'Entrance (arrival point)') : 'No entrance recorded');
   item(inferred ? 'mk-boss mk-inferred' : 'mk-boss', !bosses.length ? 'Boss position unknown: no single boss spawn point in this map file'
@@ -79,19 +83,24 @@ function strokeRoute(ctx, route, ox, oy, scale, width, colorOf){
 window.drawMapMarkers = function(ctx, m, ox, oy, scale, spawns){
   const k = m && !m.custom_geometry && window.PD2MapMarkers && window.PD2MapMarkers[m.id];
   const route = k && window.PD2ClearRoute ? window.PD2ClearRoute(m, k.entrance, k.boss && k.boss[0], spawns) : [];
-  legend(m, route.length > 1, route.covered, spawns ? spawns.length : 0, route.some(point => point.retrace));
+  legend(m, route, spawns ? spawns.length : 0);
   if (!k) return;
   const at = p => [ox + (p.x + .5) * scale, oy + (p.y + .5) * scale];
   const showNames = scale >= 1.6;
-  if (route.length > 1){
+  const paths = route.teams && route.teams.length ? route.teams : route.length > 1 ? [route] : [];
+  if (paths.length){
     const group = window.PD2ClearSettings ? window.PD2ClearSettings().radius : 35;
     const bar = group * 2 * scale;
     const core = Math.max(1.25, scale * 1.05);
     ctx.save();
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    strokeRoute(ctx, route, ox, oy, scale, bar + Math.max(2, scale * 1.5), retrace => retrace ? 'rgba(20,40,70,.55)' : 'rgba(0,0,0,.45)');
-    strokeRoute(ctx, route, ox, oy, scale, bar, retrace => retrace ? 'rgba(90,160,220,.38)' : 'rgba(226,59,46,.32)');
-    strokeRoute(ctx, route, ox, oy, scale, core, retrace => retrace ? '#7eb6ff' : '#ff4d3a');
+    for (let index = 0; index < paths.length; index++){
+      const color = TEAM_COLORS[index % TEAM_COLORS.length];
+      const path = paths[index];
+      strokeRoute(ctx, path, ox, oy, scale, bar + Math.max(2, scale * 1.5), retrace => retrace ? 'rgba(20,20,20,.55)' : 'rgba(0,0,0,.45)');
+      strokeRoute(ctx, path, ox, oy, scale, bar, retrace => retrace ? 'rgba(220,220,220,.45)' : color + '52');
+      strokeRoute(ctx, path, ox, oy, scale, core, retrace => retrace ? '#f4f4f4' : color);
+    }
     ctx.restore();
   }
   if (k.entrance){ const [x, y] = at(k.entrance), r = clamp(scale * 5, 7, 20); portal(ctx, x, y, r); if (showNames) label(ctx, 'Entrance', x + r * .8 + 5, y); }
@@ -103,7 +112,7 @@ function bindClearControls(){
     const loot = document.getElementById('lootPanel');
     if (loot && !loot.hidden && typeof drawMap === 'function') drawMap();
   };
-  for (const id of ['clearTarget', 'clearRadius']) document.getElementById(id)?.addEventListener('input', refresh);
+  for (const id of ['clearTarget', 'clearRadius', 'clearTeams']) document.getElementById(id)?.addEventListener('input', refresh);
 }
 if (document.readyState === 'loading') document.addEventListener('DOMContentLoaded', bindClearControls);
 else bindClearControls();
