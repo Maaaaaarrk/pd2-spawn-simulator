@@ -42,24 +42,44 @@ function label(ctx, text, x, y){
   ctx.fillStyle = '#e6d39a'; ctx.fillText(text, x, y);
   ctx.restore();
 }
-function legend(m){
+function legend(m, hasRoute){
   const el = document.getElementById('mapMarkerLegend'); if (!el) return;
-  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') : '';
+  const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + (hasRoute ? ':route' : '') : '';
   if (el.dataset.key === key) return; el.dataset.key = key;
   const k = m && !m.custom_geometry && window.PD2MapMarkers[m.id];
   const bosses = k ? k.boss.map(b => b.name) : [], inferred = k && k.boss.some(b => b.inferred);
   el.replaceChildren();
   const item = (cls, text) => { const s = document.createElement('span'); const i = document.createElement('i'); i.className = cls; s.append(i, document.createTextNode(text)); el.append(s); };
   if (!k){ item('mk-none', 'Entrance and boss positions are only known for the reference layouts.'); return; }
+  if (hasRoute) item('mk-route', 'Clear route');
   item('mk-portal', k.entrance ? (k.entrance.source === 'portal' ? 'Entrance portal' : 'Entrance (arrival point)') : 'No entrance recorded');
   item(inferred ? 'mk-boss mk-inferred' : 'mk-boss', !bosses.length ? 'Boss position unknown: no single boss spawn point in this map file'
     : inferred ? 'Boss spawn point (inferred from the map file): ' + bosses.join(', ') : 'Boss: ' + bosses.join(', '));
 }
+function strokeRoute(ctx, route, ox, oy, scale){
+  ctx.beginPath();
+  for (let i = 0; i < route.length; i++){
+    const x = ox + route[i].x * scale, y = oy + route[i].y * scale;
+    i ? ctx.lineTo(x, y) : ctx.moveTo(x, y);
+  }
+  ctx.stroke();
+}
 window.drawMapMarkers = function(ctx, m, ox, oy, scale){
-  legend(m);
-  const k = m && !m.custom_geometry && window.PD2MapMarkers && window.PD2MapMarkers[m.id]; if (!k) return;
+  const k = m && !m.custom_geometry && window.PD2MapMarkers && window.PD2MapMarkers[m.id];
+  const route = k && window.PD2ClearRoute ? window.PD2ClearRoute(m, k.entrance, k.boss[0]) : [];
+  legend(m, route.length > 1);
+  if (!k) return;
   const at = p => [ox + (p.x + .5) * scale, oy + (p.y + .5) * scale];
   const showNames = scale >= 1.6;
+  if (route.length > 1){
+    ctx.save();
+    ctx.lineJoin = 'round'; ctx.lineCap = 'round';
+    ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.lineWidth = Math.max(3.5, scale * 2.6);
+    strokeRoute(ctx, route, ox, oy, scale);
+    ctx.strokeStyle = '#e23b2e'; ctx.lineWidth = Math.max(1.6, scale * 1.45);
+    strokeRoute(ctx, route, ox, oy, scale);
+    ctx.restore();
+  }
   if (k.entrance){ const [x, y] = at(k.entrance), r = clamp(scale * 5, 7, 20); portal(ctx, x, y, r); if (showNames) label(ctx, 'Entrance', x + r * .8 + 5, y); }
   for (const b of k.boss){ const [x, y] = at(b), r = clamp(scale * 4.5, 7, 18); skull(ctx, x, y, r, b.inferred); if (showNames) label(ctx, b.name, x + r + 5, y); }
 };

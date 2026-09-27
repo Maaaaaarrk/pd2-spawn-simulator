@@ -13,6 +13,7 @@ half-applying. Inputs, all in this folder:
     theme.css, corners.css   stylesheet (corner ornaments copied from the IAS Calculator)
     skin.js                  life/mana globes, stone texture and embers (from the IAS Calculator)
     markers.json, markers.js boss and entrance positions and their drawing; rebuild markers.json with markers.py
+    route.js                 walking clear drawn on the same map, from the entrance through the corridors to the boss
 """
 import argparse, gzip, hashlib, re, subprocess
 from pathlib import Path
@@ -80,10 +81,10 @@ markup = markup[:m.start()] + ('<main>\n<header class="page-head">'
 
 # ---- boss and entrance markers (markers.py reads them from the installed DS1 presets)
 markup = rep(markup, '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement"></canvas>',
-    '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement, the entrance portal and the map boss"></canvas>'
+    '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement, the clear route, the entrance portal and the map boss"></canvas>'
     '<p id="mapMarkerLegend" class="map-legend" role="note"></p>', where='legend')
 markup += ('<script>window.PD2MapMarkers=' + read('markers.json') + ';</script>\n'
-           '<script>' + read('markers.js') + '</script>\n')
+           '<script>' + read('route.js') + '\n' + read('markers.js') + '</script>\n')
 
 # ---- workspace / developer style blocks
 for old, new in [
