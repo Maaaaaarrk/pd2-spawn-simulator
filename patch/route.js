@@ -165,6 +165,7 @@ function clearanceOf(floor, cw, ch){
 function shortest(floor, w, h, start, trail, exempt, hot, clearance){
   const n = w * h;
   const dist = new Float64Array(n);
+  const hops = new Int32Array(n);
   dist.fill(Infinity);
   const prev = new Int32Array(n);
   prev.fill(-1);
@@ -187,12 +188,13 @@ function shortest(floor, w, h, start, trail, exempt, hot, clearance){
       const nd = d + time * TIME + 1 + center;
       if (nd < dist[v]){
         dist[v] = nd;
+        hops[v] = hops[u] + 1;
         prev[v] = u;
         heapPush(heap, v, nd);
       }
     }
   }
-  return { dist, prev };
+  return { dist, prev, hops };
 }
 
 function pathFrom(prev, w, start, goal){
@@ -319,47 +321,47 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles, teamCou
   paintBar(trail, cw, ch, here, reach);
   const room = clearanceOf(floor, cw, ch);
   const teams = [];
-  for (let team = 0; team < teamCount; team++) teams.push({ here, cells: [here], retraces: [false] });
+  for (let team = 0; team < teamCount; team++) teams.push({ here, cells: [here], retraces: [false], steps: 0 });
   let backs = 0, steps = 0;
   const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
   let stop = 'legs';
   let legs = 0;
   while (covered < goal && legs < 500){
-    let progress = false;
-    for (const team of teams){
-      if (covered >= goal || legs >= 500) break;
-      legs++;
-      exempt.fill(0);
-      paintBar(exempt, cw, ch, team.here, reach);
-      markHot(hot, spawns, got, floor, cw, ch, radius);
-      const search = shortest(floor, cw, ch, { x: team.here % cw, y: (team.here / cw) | 0 }, trail, exempt, hot, room);
-      let best = -1, bestScore = 0;
-      for (const spot of spawnSpots(got, spawns, floor, cw, ch, stride)){
-        const dist = search.dist[spot];
-        if (!Number.isFinite(dist) || dist === 0) continue;
-        const at = centerOf(spot);
-        const added = spawnGain(got, spawns, at.x, at.y, radius);
-        if (!added) continue;
-        const score = added / dist;
-        if (score > bestScore){ bestScore = score; best = spot; }
-      }
-      if (best < 0) continue;
-      const legCells = pathFrom(search.prev, cw, { x: team.here % cw, y: (team.here / cw) | 0 }, best);
-      if (!legCells) continue;
-      progress = true;
-      for (const cell of legCells){
-        steps++;
-        if (walked[cell]) backs++;
-        team.retraces.push(!!(trail[cell] && !exempt[cell]));
-        walked[cell] = 1;
-        team.cells.push(cell);
-        const at = centerOf(cell);
-        covered += spawnPaint(got, spawns, at.x, at.y, radius);
-      }
-      for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
-      team.here = best;
+    let mover = null, least = Infinity;
+    for (const team of teams) if (team.steps < least){ least = team.steps; mover = team; }
+    legs++;
+    exempt.fill(0);
+    paintBar(exempt, cw, ch, mover.here, reach);
+    markHot(hot, spawns, got, floor, cw, ch, radius);
+    const search = shortest(floor, cw, ch, { x: mover.here % cw, y: (mover.here / cw) | 0 }, trail, exempt, hot, room);
+    const longest = teams.reduce((max, team) => Math.max(max, team.steps), 0);
+    let best = -1, bestScore = 0;
+    for (const spot of spawnSpots(got, spawns, floor, cw, ch, stride)){
+      const dist = search.dist[spot];
+      const hops = search.hops[spot];
+      if (!Number.isFinite(dist) || dist === 0 || !hops) continue;
+      const at = centerOf(spot);
+      const added = spawnGain(got, spawns, at.x, at.y, radius);
+      if (!added) continue;
+      const overshoot = Math.max(0, mover.steps + hops - Math.max(longest, mover.steps));
+      const score = (added / dist) / (1 + overshoot / Math.max(8, hops));
+      if (score > bestScore){ bestScore = score; best = spot; }
     }
-    if (!progress){ stop = 'no-candidate'; break; }
+    if (best < 0){ stop = 'no-candidate'; break; }
+    const legCells = pathFrom(search.prev, cw, { x: mover.here % cw, y: (mover.here / cw) | 0 }, best);
+    if (!legCells){ stop = 'no-path'; break; }
+    for (const cell of legCells){
+      steps++;
+      if (walked[cell]) backs++;
+      mover.retraces.push(!!(trail[cell] && !exempt[cell]));
+      walked[cell] = 1;
+      mover.cells.push(cell);
+      const at = centerOf(cell);
+      covered += spawnPaint(got, spawns, at.x, at.y, radius);
+    }
+    for (const cell of legCells) paintBar(trail, cw, ch, cell, reach);
+    mover.steps += legCells.length;
+    mover.here = best;
   }
   const routes = teams.map(team => simplifyRuns(team.cells.map((cell, index) => ({
     x: (cell % cw) * CELL + CELL / 2,
