@@ -33,6 +33,8 @@ s = gzip.decompress(base).decode('utf-8')
 theme = read('theme.css') + '\n' + read('corners.css') + '\n'
 theme += '.sort-button,.mob-toggle,.linkish{box-shadow:none!important;text-shadow:none!important;filter:none!important;font-family:inherit!important;letter-spacing:0!important;transform:none!important}\n'
 theme += '.tabs button{width:auto}\n'
+# Tristram panels: a stone sheet with gold and soot edges, no gilded corners
+theme += '.card{background:color-mix(in srgb,var(--tri-panel) 95%,transparent);border:1px solid var(--tri-line);box-shadow:inset 0 4px 0 var(--tri-gold),inset 0 -4px 0 var(--tri-shadow),0 14px 40px rgba(0,0,0,.55)}.card::before{display:none}\n'
 skin = read('skin.js')
 
 def rep(text, old, new, count=1, where=''):
@@ -51,10 +53,15 @@ main_script, tail = rest[:main_end], rest[main_end:]
 markup = rep(markup, '<title>PD2 · Spawn research lab</title>',
     '<title>PD2 Spawn Simulator</title>\n<link rel="preconnect" href="https://fonts.googleapis.com">\n'
     '<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>\n'
-    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Cinzel:wght@500;700&family=Alegreya+Sans:ital,wght@0,400;0,500;0,700;1,400&family=IBM+Plex+Mono:wght@400;500&display=swap">', where='title')
+    '<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Almendra:ital,wght@0,400;0,700;1,400&family=Silkscreen:wght@400;700&family=IBM+Plex+Mono:wght@400;500&display=swap">', where='title')
 a = markup.index('<style>') + len('<style>')
 b = markup.index('</style>', a)
 markup = markup[:a] + theme + markup[b:]
+# the Tristram theme shared with the other tools, after the tool's own sheet
+b = markup.index('</style>', a) + len('</style>')
+markup = markup[:b] + ('\n<link rel="stylesheet" href="https://roofooevazan.github.io/assets/tristram.css">'
+    '\n<link rel="stylesheet" href="https://roofooevazan.github.io/assets/tristram-tools.css">') + markup[b:]
+markup = rep(markup, '<body>', '<body class="tri">', where='body')
 
 # ---- header markup
 # shared site nav (hub assets/site-nav.js) replaces the old per-tool rf-sitebar
@@ -62,7 +69,7 @@ m = re.search(r'<!--rf-sitebar-->.*?<!--/rf-sitebar-->', markup, re.S)
 if not m: raise SystemExit('rf-sitebar not found')
 markup = markup[:m.start()] + ('<script src="https://roofooevazan.github.io/assets/site-nav.js"></script>\n'
     '<canvas id="embers" aria-hidden="true"></canvas>') + markup[m.end():]
-if not re.search(r'<body>\s*<script src="https://roofooevazan.github.io/assets/site-nav.js">', markup):
+if not re.search(r'<body[^>]*>\s*<script src="https://roofooevazan.github.io/assets/site-nav.js">', markup):
     raise SystemExit('site nav is not the first thing in <body>')
 m = re.search(r'<main>\s*<div class="eyebrow">Project Diablo II · Experimental model</div><h1>Spawn research lab</h1>\s*(<p>.*?</p>)', markup, re.S)
 if not m: raise SystemExit('header not found')
@@ -81,15 +88,15 @@ markup += ('<script>window.PD2MapMarkers=' + read('markers.json') + ';</script>\
 # ---- workspace / developer style blocks
 for old, new in [
     ('.tabs button[aria-selected=true]{background:#7de0c0;color:#081019}',
-     '.tabs{gap:10px!important}.tabs button[aria-selected=true]{color:#fff3c9;background:linear-gradient(180deg,#7a5f2e 0%,#4b391b 48%,#33260f 52%,#4a3718 100%);box-shadow:inset 0 1px 0 rgba(255,236,180,.45),inset 0 -2px 0 rgba(0,0,0,.5),0 0 0 1px #b9954c,0 0 16px rgba(230,180,80,.25),0 3px 6px rgba(0,0,0,.7)}'),
-    ('#balanceChart{width:100%;height:auto;background:#0d1924;border-radius:8px}', '#balanceChart{width:100%;height:auto;background:#0c0a08;border:1px solid #000;box-shadow:0 0 0 1px #4d3f28;border-radius:2px}'),
+     '.tabs{gap:10px!important}.tabs button[aria-selected=true]{color:var(--tri-accent-fg);background:var(--tri-accent);border-color:var(--tri-accent);box-shadow:none}'),
+    ('#balanceChart{width:100%;height:auto;background:#0d1924;border-radius:8px}', '#balanceChart{width:100%;height:auto;background:#0c0a08;border:1px solid var(--edge);border-radius:0}'),
     ('.tab-note{padding:12px;background:#0d1924;border-radius:8px}', '.tab-note{padding:12px}'),
-    ('background:#0a1823;border:1px solid #29485a;border-radius:8px', 'background:rgba(0,0,0,.5);border:1px solid #2e261a;box-shadow:inset 0 0 0 1px #000,0 0 0 1px #4d3f28;border-radius:2px'),
+    ('background:#0a1823;border:1px solid #29485a;border-radius:8px', 'background:rgba(0,0,0,.5);border:1px solid #2e261a;border-color:var(--edge);border-radius:0'),
     ('.mob-summary-row:focus{background:#172c3b;', '.mob-summary-row:focus{background:#241e16;'),
     ('color:#eaf7ff;text-align:left', 'color:var(--ink);text-align:left'),
     ('.mob-detail-row>td{padding:0;background:#091722;', '.mob-detail-row>td{padding:0;background:#0c0a08;'),
     ('#devPanel code{color:#bceee0;', '#devPanel code{color:var(--gold-hi);'),
-    ('#devPanel pre{background:#09141e;padding:16px;border-radius:8px;', '#devPanel pre{background:rgba(0,0,0,.6);border:1px solid var(--edge);padding:16px;border-radius:3px;color:#d8d2c2;'),
+    ('#devPanel pre{background:#09141e;padding:16px;border-radius:8px;', '#devPanel pre{background:rgba(0,0,0,.6);border:1px solid var(--edge);padding:16px;border-radius:0;color:#d8d2c2;'),
     ('font:12px/1.6 ui-monospace,Consolas,monospace', 'font:12px/1.6 var(--mono)'),
 ]:
     markup = rep(markup, old, new, where='styles')
