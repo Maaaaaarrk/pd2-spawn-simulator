@@ -83,7 +83,7 @@ markup = markup[:m.start()] + ('<main>\n<header class="page-head">'
 markup = rep(markup, '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>',
     '<label>Map<select id="map"></select></label><label>Layout<select id="layout"></select></label>'
     '<label>Spawn clear (%)<input id="clearTarget" type="number" min="1" max="100" step="1" value="90"></label>'
-    '<label>Group radius (subtiles)<input id="clearRadius" type="number" min="1" max="80" step="1" value="15"></label>', where='clear controls')
+    '<label>Group size (subtiles)<input id="clearRadius" type="number" min="1" max="200" step="1" value="35"></label>', where='clear controls')
 
 # ---- boss and entrance markers (markers.py reads them from the installed DS1 presets)
 markup = rep(markup, '<canvas id="terrain" tabindex="0" aria-label="Map terrain with illustrative monster pack placement"></canvas>',

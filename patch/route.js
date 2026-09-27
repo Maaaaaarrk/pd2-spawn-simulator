@@ -1,7 +1,8 @@
 (function(){
 'use strict';
 const CELL = 5;
-const BACKTRACK = 4;
+const ALONG = 40;
+const TIME = 1000;
 const N4 = [[1, 0], [-1, 0], [0, 1], [0, -1]];
 const cache = new Map();
 
@@ -18,7 +19,7 @@ function settings(){
   const radius = readNumber('clearRadius');
   return {
     target: Number.isFinite(target) ? Math.max(1, Math.min(100, target)) : 90,
-    radius: Number.isFinite(radius) ? Math.max(1, Math.min(80, radius)) : 15,
+    radius: Number.isFinite(radius) ? Math.max(1, Math.min(200, radius)) : 35,
   };
 }
 
@@ -97,9 +98,42 @@ function heapPop(heap){
   return [i, d];
 }
 
-function shortest(floor, w, h, start, walked){
+function paintBar(grid, cw, ch, cell, reach){
+  const cx = cell % cw, cy = (cell / cw) | 0;
+  const lim = Math.ceil(reach), r2 = reach * reach;
+  for (let dy = -lim; dy <= lim; dy++){
+    for (let dx = -lim; dx <= lim; dx++){
+      if (dx * dx + dy * dy > r2) continue;
+      const x = cx + dx, y = cy + dy;
+      if (!inside(cw, ch, x, y)) continue;
+      grid[y * cw + x] = 1;
+    }
+  }
+}
+
+function markHot(hot, spawns, got, floor, cw, ch, radius){
+  hot.fill(0);
+  const lim = Math.ceil(radius / CELL), r2 = radius * radius;
+  for (let i = 0; i < spawns.length; i++){
+    if (got[i]) continue;
+    const sx = spawns[i].x, sy = spawns[i].y;
+    const cx = sx / CELL | 0, cy = sy / CELL | 0;
+    for (let dy = -lim; dy <= lim; dy++){
+      for (let dx = -lim; dx <= lim; dx++){
+        const x = cx + dx, y = cy + dy;
+        if (!inside(cw, ch, x, y)) continue;
+        const cell = y * cw + x;
+        if (!floor[cell] || hot[cell]) continue;
+        const px = x * CELL + CELL / 2 - sx, py = y * CELL + CELL / 2 - sy;
+        if (px * px + py * py <= r2) hot[cell] = 1;
+      }
+    }
+  }
+}
+
+function shortest(floor, w, h, start, trail, exempt, hot){
   const n = w * h;
-  const dist = new Float32Array(n);
+  const dist = new Float64Array(n);
   dist.fill(Infinity);
   const prev = new Int32Array(n);
   prev.fill(-1);
@@ -116,7 +150,8 @@ function shortest(floor, w, h, start, walked){
       if (!inside(w, h, nx, ny)) continue;
       const v = ny * w + nx;
       if (!floor[v]) continue;
-      const nd = d + (walked[v] ? BACKTRACK : 1);
+      const time = trail[v] && !exempt[v] ? ALONG : hot[v] ? 0 : 1;
+      const nd = d + time * TIME + 1;
       if (nd < dist[v]){
         dist[v] = nd;
         prev[v] = u;
@@ -227,17 +262,25 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
   if (here < 0) return [];
   const got = new Uint8Array(spawns.length);
   const walked = new Uint8Array(floor.length);
+  const trail = new Uint8Array(floor.length);
+  const exempt = new Uint8Array(floor.length);
+  const hot = new Uint8Array(floor.length);
+  const reach = radius / CELL;
   const centerOf = cell => ({ x: (cell % cw) * CELL + CELL / 2, y: ((cell / cw) | 0) * CELL + CELL / 2 });
   let covered = spawnPaint(got, spawns, centerOf(here).x, centerOf(here).y, radius);
   let bossReached = !boss || bossAt < 0 || hits(boss, centerOf(here).x, centerOf(here).y, radius);
   walked[here] = 1;
+  paintBar(trail, cw, ch, here, reach);
   const cells = [here];
   let backs = 0, steps = 0;
   const stride = Math.max(1, Math.round(Math.max(radius / CELL, 1)));
   const horizon = Math.max(8, radius / CELL * 2);
   let stop = 'legs';
   for (let leg = 0; leg < 500 && (covered < goal || !bossReached); leg++){
-    const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, walked);
+    exempt.fill(0);
+    paintBar(exempt, cw, ch, here, reach);
+    markHot(hot, spawns, got, floor, cw, ch, radius);
+    const search = shortest(floor, cw, ch, { x: here % cw, y: (here / cw) | 0 }, trail, exempt, hot);
     const needBoss = !bossReached && covered >= goal;
     let best = -1, bestScore = 0;
     const pool = needBoss ? [bossAt] : spawnSpots(got, spawns, floor, cw, ch, stride, bossReached ? -1 : bossAt);
@@ -262,6 +305,7 @@ function plan(layout, entrance, boss, spawns, targetPct, radiusSubtiles){
       steps++;
       if (walked[cell]) backs++;
       walked[cell] = 1;
+      paintBar(trail, cw, ch, cell, reach);
       cells.push(cell);
       const at = centerOf(cell);
       covered += spawnPaint(got, spawns, at.x, at.y, radius);

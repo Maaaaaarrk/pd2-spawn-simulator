@@ -44,7 +44,7 @@ function label(ctx, text, x, y){
 }
 function legend(m, hasRoute, routeCovered, spawnCount){
   const el = document.getElementById('mapMarkerLegend'); if (!el) return;
-  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 15 };
+  const choice = window.PD2ClearSettings ? window.PD2ClearSettings() : { target: 90, radius: 35 };
   const key = m ? m.id + (m.custom_geometry ? ':custom' : '') + ':' + choice.target + ':' + choice.radius + ':' + (hasRoute ? Math.round((routeCovered || 0) * 100) : 0) : '';
   if (el.dataset.key === key) return; el.dataset.key = key;
   const k = m && !m.custom_geometry && window.PD2MapMarkers[m.id];
@@ -74,11 +74,14 @@ window.drawMapMarkers = function(ctx, m, ox, oy, scale, spawns){
   const at = p => [ox + (p.x + .5) * scale, oy + (p.y + .5) * scale];
   const showNames = scale >= 1.6;
   if (route.length > 1){
+    const group = window.PD2ClearSettings ? window.PD2ClearSettings().radius : 35;
     ctx.save();
     ctx.lineJoin = 'round'; ctx.lineCap = 'round';
-    ctx.strokeStyle = 'rgba(0,0,0,.8)'; ctx.lineWidth = Math.max(3.5, scale * 2.6);
+    ctx.strokeStyle = 'rgba(0,0,0,.45)'; ctx.lineWidth = group * 2 * scale + Math.max(2, scale * 1.5);
     strokeRoute(ctx, route, ox, oy, scale);
-    ctx.strokeStyle = '#e23b2e'; ctx.lineWidth = Math.max(1.6, scale * 1.45);
+    ctx.strokeStyle = 'rgba(226,59,46,.32)'; ctx.lineWidth = group * 2 * scale;
+    strokeRoute(ctx, route, ox, oy, scale);
+    ctx.strokeStyle = '#ff4d3a'; ctx.lineWidth = Math.max(1.25, scale * 1.05);
     strokeRoute(ctx, route, ox, oy, scale);
     ctx.restore();
   }
